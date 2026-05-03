@@ -221,7 +221,17 @@ def late_fusion(dcur, curdf, fusion_type=["mean", "vote", "all"]):
         dcur.setdefault("late_all", [])
         late_all = np.mean(high) if correctnum == len(curdf["preds"]) else np.mean(low)
         dcur["late_all"].append(late_all)
-    return 
+    return
+
+
+def _concept_step_to_str(s):
+    """Single timestep concept: int (standard) or length-4 list / ndarray (kc_fm4)."""
+    if isinstance(s, (list, tuple)):
+        return "^".join(str(int(x)) for x in s)
+    if isinstance(s, np.ndarray) and s.size > 1:
+        return "^".join(str(int(x)) for x in np.asarray(s).flatten())
+    return str(int(s))
+
 
 def effective_fusion(df, model, model_name, fusion_type):
     dres = dict()
@@ -253,7 +263,9 @@ def effective_fusion(df, model, model_name, fusion_type):
         dcur["qidxs"].append(ui[0])
         dcur["row"].append(int(curdf["row"].mean()))
         dcur["questions"].append(",".join([str(int(s)) for s in curdf["questions"].tolist()]))
-        dcur["concepts"].append(",".join([str(int(s)) for s in curdf["concepts"].tolist()]))
+        dcur["concepts"].append(
+            ",".join(_concept_step_to_str(s) for s in curdf["concepts"].tolist())
+        )
         late_fusion(dcur, curdf)
         # save original predres in concepts
         dcur["concept_preds"].append(",".join([str(round(s, 4)) for s in (curdf["preds"].tolist())]))

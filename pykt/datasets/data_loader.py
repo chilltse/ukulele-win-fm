@@ -23,17 +23,19 @@ class KTDataset(Dataset):
         folds (set(int)): the folds used to generate dataset, -1 for test data
         qtest (bool, optional): is question evaluation or not. Defaults to False.
     """
-    def __init__(self, file_path, input_type, folds, qtest=False):
+    def __init__(self, file_path, input_type, folds, qtest=False, kc_fm4=False):
         super(KTDataset, self).__init__()
         sequence_path = file_path
         self.input_type = input_type
         self.qtest = qtest
+        self.kc_fm4 = kc_fm4
         folds = sorted(list(folds))
         folds_str = "_" + "_".join([str(_) for _ in folds])
+        fm4_suffix = "_fm4" if kc_fm4 else ""
         if self.qtest:
-            processed_data = file_path + folds_str + "_qtest.pkl"
+            processed_data = file_path + folds_str + fm4_suffix + "_qtest.pkl"
         else:
-            processed_data = file_path + folds_str + ".pkl"
+            processed_data = file_path + folds_str + fm4_suffix + ".pkl"
 
         if not os.path.exists(processed_data):
             print(f"Start preprocessing {file_path} fold: {folds_str}...")
@@ -88,8 +90,13 @@ class KTDataset(Dataset):
                 dcur["shft_"+key] = self.dori[key]
                 continue
             # print(f"key: {key}, len: {len(self.dori[key])}")
-            seqs = self.dori[key][index][:-1] * mseqs
-            shft_seqs = self.dori[key][index][1:] * mseqs
+            if key == "cseqs" and self.kc_fm4:
+                m = mseqs.unsqueeze(-1).to(self.dori[key].device)
+                seqs = self.dori[key][index][:-1] * m
+                shft_seqs = self.dori[key][index][1:] * m
+            else:
+                seqs = self.dori[key][index][:-1] * mseqs
+                shft_seqs = self.dori[key][index][1:] * mseqs
             dcur[key] = seqs
             dcur["shft_"+key] = shft_seqs
         dcur["masks"] = mseqs
@@ -126,10 +133,24 @@ class KTDataset(Dataset):
         interaction_num = 0
         # seq_qidxs, seq_rests = [], []
         dqtest = {"qidxs": [], "rests":[], "orirow":[]}
+        def _parse_fm4_concept(tok):
+            tok = str(tok).strip()
+            if tok == str(pad_val):
+                return [pad_val] * 4
+            parts = tok.split("^")
+            if len(parts) != 4:
+                raise ValueError(f"kc_fm4 concept must be i0^i1^i2^i3 or {pad_val}, got {tok!r}")
+            return [int(p) for p in parts]
+
         for i, row in df.iterrows():
             #use kc_id or question_id as input
             if "concepts" in self.input_type:
-                dori["cseqs"].append([int(_) for _ in row["concepts"].split(",")])
+                if self.kc_fm4:
+                    dori["cseqs"].append(
+                        [_parse_fm4_concept(t) for t in row["concepts"].split(",")]
+                    )
+                else:
+                    dori["cseqs"].append([int(_) for _ in row["concepts"].split(",")])
             if "questions" in self.input_type:
                 dori["qseqs"].append([int(_) for _ in row["questions"].split(",")])
             if "timestamps" in row:
@@ -152,7 +173,12 @@ class KTDataset(Dataset):
             else:
                 dori[key] = FloatTensor(dori[key])
 
-        mask_seqs = (dori["cseqs"][:,:-1] != pad_val) * (dori["cseqs"][:,1:] != pad_val)
+        if self.kc_fm4:
+            mask_seqs = (dori["cseqs"][:, :-1, :] != pad_val).all(-1) * (
+                dori["cseqs"][:, 1:, :] != pad_val
+            ).all(-1)
+        else:
+            mask_seqs = (dori["cseqs"][:,:-1] != pad_val) * (dori["cseqs"][:,1:] != pad_val)
         dori["masks"] = mask_seqs
 
         dori["smasks"] = (dori["smasks"][:, 1:] != pad_val)

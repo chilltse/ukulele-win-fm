@@ -2,23 +2,14 @@ import json
 import pandas as pd
 from .utils import sta_infos, write_txt
 
-# KC: prev_pitches | prev_strings | pitches | strings（同一条 exercise 内首帧 prev_* 为 inf）
+# KC 四维（与 yousician_preprocess 一致）：prev_pitches | prev_strings | pitches | strings
+# 本文件将四列以原始字符串用 "|" 连接写入 skills 行，供 split 阶段按域独立建词典；
+# 序列 CSV 中每步概念为 i0^i1^i2^i3（split_datasets.id_mapping_fm4）。
 
 KEYS = ["user_id", "sequence_id"]
 
-# =============================================================================
-# yousician JSON 预处理
-# -----------------------------------------------------------------------------
-# 1) 只保留 play_mode == "play" 的样本
-# 2) 按 user_id 分组，同一用户内按 days_since_signup / session / part 排序后拼接
-# 3) question_id = prev_duration|pitches|strings；prev_duration 按 exercise：起始音为 "inf"，否则为上一音 duration
-# 4) KC（sequence_id）= prev_pitches|prev_strings|pitches|strings；首帧 prev_pitches / prev_strings 为 "inf"，否则为上一音对应字段
-# 5) response = reject_reason：0→1，非0→0
-# =============================================================================
-
 
 def sanitize_field(x, sep="^"):
-    """将字段转成字符串，并把逗号替换为 sep，避免和 write_txt 的逗号分隔冲突。"""
     s = str(x)
     s = s.replace(",", sep)
     s = s.replace("\n", "").replace("\r", "").replace("\t", "").replace(" ", "")
@@ -26,7 +17,7 @@ def sanitize_field(x, sep="^"):
 
 
 def _events_to_event_rows(events_data_str):
-    """从 events_data 解析 (question_id, kc, response)。prev 均在每个 exercise(record) 内计算。"""
+    """每事件输出 question_id（四域拼接）与 KC 四域字符串 raw0|raw1|raw2|raw3。"""
     data = json.loads(events_data_str)
     inner = data.get("data", data)
 
@@ -42,18 +33,15 @@ def _events_to_event_rows(events_data_str):
     for i in range(n):
         pitch_s = sanitize_field(str(pitches[i]), sep="^")
         string_s = sanitize_field(str(strings[i]), sep="^")
-
         prev_ps = "inf" if i == 0 else sanitize_field(str(pitches[i - 1]), sep="^")
         prev_ss = "inf" if i == 0 else sanitize_field(str(strings[i - 1]), sep="^")
 
         qid = f"{prev_ps}|{prev_ss}|{pitch_s}|{string_s}"
-        kc = qid
-
+        kc_four = f"{prev_ps}|{prev_ss}|{pitch_s}|{string_s}"
         resp = 1 if reject_reason[i] == 0 else 0
-        out.append((qid, kc, resp))
+        out.append((qid, kc_four, resp))
 
     return out
-
 
 
 def read_data_from_json(read_file, write_file):
@@ -76,7 +64,7 @@ def read_data_from_json(read_file, write_file):
             event_list = _events_to_event_rows(r["events_data"])
         except (KeyError, TypeError, json.JSONDecodeError):
             continue
-        for qid, kc, resp in event_list:
+        for qid, kc_four, resp in event_list:
             rows.append(
                 {
                     "user_id": uid,
@@ -84,7 +72,7 @@ def read_data_from_json(read_file, write_file):
                     "exercise_part_index": part,
                     "session_index": sess,
                     "question_id": qid,
-                    "sequence_id": kc,
+                    "sequence_id": kc_four,
                     "correct": resp,
                 }
             )

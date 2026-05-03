@@ -12,6 +12,8 @@ def process_raw_data(dataset_name,dname2paths):
     print(f"Start preprocessing data: {dataset_name}")
     if dataset_name == "yousician":
         from .yousician_preprocess import read_data_from_json
+    if dataset_name == "yousician_fm4":
+        from .yousician_preprocess_kc_fm4 import read_data_from_json as read_data_from_json_fm4
     if dataset_name == "assist2009":
         from .assist2009_preprocess import read_data_from_csv
     elif dataset_name == "assist2012":
@@ -52,6 +54,12 @@ def process_raw_data(dataset_name,dname2paths):
         dname, writef = read_data_from_csv(readf, writef, dataset_name=dataset_name)
     elif dataset_name == "yousician":
         read_data_from_json(readf, writef)
+    elif dataset_name == "yousician_fm4":
+        root = os.path.dirname(os.path.abspath(readf))
+        dname = os.path.join(root, "yousician_fm4")
+        os.makedirs(dname, exist_ok=True)
+        writef = os.path.join(dname, "data.txt")
+        read_data_from_json_fm4(readf, writef)
     elif dataset_name != "nips_task34":#default case
         read_data_from_csv(readf, writef)
     else:

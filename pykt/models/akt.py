@@ -16,7 +16,8 @@ class Dim(IntEnum):
 
 class AKT(nn.Module):
     def __init__(self, n_question, n_pid, d_model, n_blocks, dropout, d_ff=256, 
-            kq_same=1, final_fc_dim=512, num_attn_heads=8, separate_qa=False, l2=1e-5, emb_type="qid", emb_path="", pretrain_dim=768):
+            kq_same=1, final_fc_dim=512, num_attn_heads=8, separate_qa=False, l2=1e-5, emb_type="qid", emb_path="", pretrain_dim=768,
+            num_c_fm4=None):
         super().__init__()
         """
         Input:
@@ -35,13 +36,27 @@ class AKT(nn.Module):
         self.model_type = self.model_name
         self.separate_qa = separate_qa
         self.emb_type = emb_type
+        self.num_c_fm4 = num_c_fm4
         embed_l = d_model
+        if emb_type == "qid_fm4":
+            if num_c_fm4 is None or len(num_c_fm4) != 4:
+                raise ValueError("emb_type qid_fm4 requires num_c_fm4 of length 4")
+            if separate_qa:
+                raise ValueError("qid_fm4 does not support separate_qa")
+            self.kc_emb = nn.ModuleList(
+                [nn.Embedding(int(n), embed_l) for n in num_c_fm4]
+            )
+            self.alpha_fm1 = nn.Parameter(torch.ones(4, embed_l))
+            self.fm2_scale = nn.Parameter(torch.tensor(1.0))
         if self.n_pid > 0:
             self.difficult_param = nn.Embedding(self.n_pid+1, 1) # 题目难度
-            self.q_embed_diff = nn.Embedding(self.n_question+1, embed_l) # question emb, 总结了包含当前question（concept）的problems（questions）的变化
+            qdiff_rows = self.n_pid + 1 if emb_type == "qid_fm4" else self.n_question + 1
+            self.q_embed_diff = nn.Embedding(qdiff_rows, embed_l) # question emb, 总结了包含当前question（concept）的problems（questions）的变化
             self.qa_embed_diff = nn.Embedding(2 * self.n_question + 1, embed_l) # interaction emb, 同上
         
-        if emb_type.startswith("qid"):
+        if emb_type == "qid_fm4":
+            self.qa_embed = nn.Embedding(2, embed_l)
+        elif emb_type.startswith("qid"):
             # n_question+1 ,d_model
             self.q_embed = nn.Embedding(self.n_question, embed_l)
             if self.separate_qa: 
@@ -64,11 +79,29 @@ class AKT(nn.Module):
 
     def reset(self):
         for p in self.parameters():
-            if p.size(0) == self.n_pid+1 and self.n_pid > 0:
+            if self.n_pid > 0 and p.dim() > 0 and p.size(0) == self.n_pid + 1:
                 torch.nn.init.constant_(p, 0.)
 
+    def fm_kc_embed(self, c4):
+        """一阶: sum_i alpha_i ⊙ e_i；二阶 FM: 0.5 * ((sum e_i)^2 - sum e_i^2)（逐维）。"""
+        es = torch.stack(
+            [self.kc_emb[i](c4[..., i].clamp(min=0)) for i in range(4)],
+            dim=2,
+        )
+        valid = (c4 >= 0).all(dim=-1, keepdim=True).unsqueeze(-1).float()
+        es = es * valid
+        alpha = self.alpha_fm1.view(1, 1, 4, -1)
+        first = (alpha * es).sum(dim=2)
+        s = es.sum(dim=2)
+        sum_sq = (es * es).sum(dim=2)
+        fm2 = 0.5 * (s * s - sum_sq)
+        return first + self.fm2_scale * fm2
+
     def base_emb(self, q_data, target):
-        q_embed_data = self.q_embed(q_data)  # BS, seqlen,  d_model# c_ct
+        if self.emb_type == "qid_fm4":
+            q_embed_data = self.fm_kc_embed(q_data)
+        else:
+            q_embed_data = self.q_embed(q_data)  # BS, seqlen,  d_model# c_ct
         if self.separate_qa:
             qa_data = q_data + self.n_question * target
             qa_embed_data = self.qa_embed(qa_data)
@@ -85,7 +118,10 @@ class AKT(nn.Module):
 
         pid_embed_data = None
         if self.n_pid > 0: # have problem id
-            q_embed_diff_data = self.q_embed_diff(q_data)  # d_ct 总结了包含当前question（concept）的problems（questions）的变化
+            if self.emb_type == "qid_fm4":
+                q_embed_diff_data = self.q_embed_diff(pid_data.long().clamp(min=0))
+            else:
+                q_embed_diff_data = self.q_embed_diff(q_data)  # d_ct 总结了包含当前question（concept）的problems（questions）的变化
             pid_embed_data = self.difficult_param(pid_data)  # uq 当前problem的难度
             q_embed_data = q_embed_data + pid_embed_data * \
                 q_embed_diff_data  # uq *d_ct + c_ct # question encoder

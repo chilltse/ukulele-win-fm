@@ -161,6 +161,51 @@ def id_mapping(df):
     return finaldf, dkeyid2idx
 
 
+def id_mapping_fm4(df):
+    """Map yousician_fm4 concepts raw0|raw1|raw2|raw3 -> integer ids per field; CSV cell i0^i1^i2^i3."""
+    id_keys = ["questions", "concepts", "uid"]
+    dres = dict()
+    dkeyid2idx = {"concepts_fm4": [{}, {}, {}, {}]}
+    print(f"df.columns (fm4): {df.columns}")
+    for key in df.columns:
+        if key not in id_keys:
+            dres[key] = df[key]
+    for i, row in df.iterrows():
+        for key in id_keys:
+            if key not in df.columns:
+                continue
+            if key == "concepts":
+                dres.setdefault("concepts", [])
+                new_cs = []
+                for token in row["concepts"].split(","):
+                    parts = token.split("|")
+                    if len(parts) != 4:
+                        raise ValueError(
+                            "kc_fm4 expects 4 fields separated by | in each concept token, "
+                            f"got {len(parts)} in {token!r}"
+                        )
+                    ids = []
+                    for j in range(4):
+                        field_d = dkeyid2idx["concepts_fm4"][j]
+                        p = parts[j]
+                        if p not in field_d:
+                            field_d[p] = len(field_d)
+                        ids.append(str(field_d[p]))
+                    new_cs.append("^".join(ids))
+                dres["concepts"].append(",".join(new_cs))
+                continue
+            dkeyid2idx.setdefault(key, dict())
+            dres.setdefault(key, [])
+            curids = []
+            for id in row[key].split(","):
+                if id not in dkeyid2idx[key]:
+                    dkeyid2idx[key][id] = len(dkeyid2idx[key])
+                curids.append(str(dkeyid2idx[key][id]))
+            dres[key].append(",".join(curids))
+    finaldf = pd.DataFrame(dres)
+    return finaldf, dkeyid2idx
+
+
 def train_test_split(df, test_ratio=0.2):
     df = df.sample(frac=1.0, random_state=1024)
     datanum = df.shape[0]
@@ -483,7 +528,10 @@ def write_config(dataset_name, dkeyid2idx, effective_keys, configf, dpath, k=5, 
         num_q = len(dkeyid2idx["questions"])
     if "concepts" in effective_keys:
         input_type.append("concepts")
-        num_c = len(dkeyid2idx["concepts"])
+        if "concepts_fm4" in dkeyid2idx:
+            num_c = max(len(dkeyid2idx["concepts_fm4"][i]) for i in range(4))
+        else:
+            num_c = len(dkeyid2idx["concepts"])
     folds = list(range(0, k))
     dconfig = {
         "dpath": dpath,
@@ -501,6 +549,11 @@ def write_config(dataset_name, dkeyid2idx, effective_keys, configf, dpath, k=5, 
         "test_file": "test_sequences.csv",
         "test_window_file": "test_window_sequences.csv"
     }
+    if "concepts_fm4" in dkeyid2idx:
+        dconfig["kc_fm4"] = True
+        dconfig["num_c_fm4"] = [
+            len(dkeyid2idx["concepts_fm4"][i]) for i in range(4)
+        ]
     dconfig.update(other_config)
     if flag:
         dconfig["test_question_file"] = "test_question_sequences.csv"
@@ -538,8 +591,11 @@ def calStatistics(df, stares, key):
             cs = row["concepts"].split(",")
             fc = list()
             for c in cs:
-                cc = c.split("_")
-                fc.extend(cc)
+                if "^" in c:
+                    fc.extend(c.split("^"))
+                else:
+                    cc = c.split("_")
+                    fc.extend(cc)
             curcs = set(fc) - {"-1"}
             allcs |= curcs
         if "questions" in row:
@@ -555,9 +611,14 @@ def get_max_concepts(df):
     max_concepts = 1
     for i, row in df.iterrows():
         cs = row["concepts"].split(",")
-        num_concepts = max([len(c.split("_")) for c in cs])
-        if num_concepts >= max_concepts:
-            max_concepts = num_concepts
+        for c in cs:
+            if "^" in c:
+                n = len(c.split("^"))
+            elif "|" in c:
+                n = len(c.split("|"))
+            else:
+                n = len(c.split("_"))
+            max_concepts = max(max_concepts, n)
     return max_concepts
 
 
@@ -595,7 +656,10 @@ def main(dname, fname, dataset_name, configf, min_seq_len=3, maxlen=200, kfold=5
         f"original total interactions: {oris}, qs: {qs}, cs: {cs}, seqnum: {seqnum}")
 
     total_df, effective_keys = extend_multi_concepts(total_df, effective_keys)
-    total_df, dkeyid2idx = id_mapping(total_df)
+    if dataset_name == "yousician_fm4":
+        total_df, dkeyid2idx = id_mapping_fm4(total_df)
+    else:
+        total_df, dkeyid2idx = id_mapping(total_df)
     dkeyid2idx["max_concepts"] = max_concepts
 
     extends, _, qs, cs, seqnum = calStatistics(
