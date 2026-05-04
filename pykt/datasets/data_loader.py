@@ -23,19 +23,19 @@ class KTDataset(Dataset):
         folds (set(int)): the folds used to generate dataset, -1 for test data
         qtest (bool, optional): is question evaluation or not. Defaults to False.
     """
-    def __init__(self, file_path, input_type, folds, qtest=False, kc_fm4=False):
+    def __init__(self, file_path, input_type, folds, qtest=False, kc_fmkc=False):
         super(KTDataset, self).__init__()
         sequence_path = file_path
         self.input_type = input_type
         self.qtest = qtest
-        self.kc_fm4 = kc_fm4
+        self.kc_fmkc = kc_fmkc
         folds = sorted(list(folds))
         folds_str = "_" + "_".join([str(_) for _ in folds])
-        fm4_suffix = "_fm4" if kc_fm4 else ""
+        fmkc_suffix = "_fmkc" if self.kc_fmkc else ""
         if self.qtest:
-            processed_data = file_path + folds_str + fm4_suffix + "_qtest.pkl"
+            processed_data = file_path + folds_str + fmkc_suffix + "_qtest.pkl"
         else:
-            processed_data = file_path + folds_str + fm4_suffix + ".pkl"
+            processed_data = file_path + folds_str + fmkc_suffix + ".pkl"
 
         if not os.path.exists(processed_data):
             print(f"Start preprocessing {file_path} fold: {folds_str}...")
@@ -90,7 +90,7 @@ class KTDataset(Dataset):
                 dcur["shft_"+key] = self.dori[key]
                 continue
             # print(f"key: {key}, len: {len(self.dori[key])}")
-            if key == "cseqs" and self.kc_fm4:
+            if key == "cseqs" and self.kc_fmkc:
                 m = mseqs.unsqueeze(-1).to(self.dori[key].device)
                 seqs = self.dori[key][index][:-1] * m
                 shft_seqs = self.dori[key][index][1:] * m
@@ -133,22 +133,41 @@ class KTDataset(Dataset):
         interaction_num = 0
         # seq_qidxs, seq_rests = [], []
         dqtest = {"qidxs": [], "rests":[], "orirow":[]}
-        def _parse_fm4_concept(tok):
+        num_fmkc_fields = None
+        if self.kc_fmkc and "concepts" in df.columns:
+            for cs in df["concepts"].tolist():
+                for tok in str(cs).split(","):
+                    tok = tok.strip()
+                    if tok != str(pad_val):
+                        num_fmkc_fields = len(tok.split("^"))
+                        break
+                if num_fmkc_fields is not None:
+                    break
+
+        def _parse_fmkc_concept(tok):
+            nonlocal num_fmkc_fields
             tok = str(tok).strip()
             if tok == str(pad_val):
-                return [pad_val] * 4
+                if num_fmkc_fields is None:
+                    raise ValueError("Cannot infer kc_fmkc field count from data (all concepts are pad).")
+                return [pad_val] * num_fmkc_fields
             parts = tok.split("^")
-            if len(parts) != 4:
-                raise ValueError(f"kc_fm4 concept must be i0^i1^i2^i3 or {pad_val}, got {tok!r}")
+            if num_fmkc_fields is None:
+                num_fmkc_fields = len(parts)
+                if num_fmkc_fields < 1:
+                    raise ValueError(f"Invalid fmkc concept token: {tok!r}")
+            if len(parts) != num_fmkc_fields:
+                raise ValueError(
+                    f"kc_fmkc concept must keep field count={num_fmkc_fields}, got {len(parts)} in token {tok!r}"
+                )
             return [int(p) for p in parts]
 
         for i, row in df.iterrows():
             #use kc_id or question_id as input
             if "concepts" in self.input_type:
-                if self.kc_fm4:
-                    dori["cseqs"].append(
-                        [_parse_fm4_concept(t) for t in row["concepts"].split(",")]
-                    )
+                if self.kc_fmkc:
+                    concept_tokens = row["concepts"].split(",")
+                    dori["cseqs"].append([_parse_fmkc_concept(t) for t in concept_tokens])
                 else:
                     dori["cseqs"].append([int(_) for _ in row["concepts"].split(",")])
             if "questions" in self.input_type:
@@ -173,7 +192,7 @@ class KTDataset(Dataset):
             else:
                 dori[key] = FloatTensor(dori[key])
 
-        if self.kc_fm4:
+        if self.kc_fmkc:
             mask_seqs = (dori["cseqs"][:, :-1, :] != pad_val).all(-1) * (
                 dori["cseqs"][:, 1:, :] != pad_val
             ).all(-1)

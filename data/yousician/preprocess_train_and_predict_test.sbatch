@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -J pykt_split_json_akt_qid_fm4
+#SBATCH -J pykt_split_json_akt_qid_fmkc
 #SBATCH -p gpu
 #SBATCH --gres=gpu:1
 #SBATCH --time=48:00:00
@@ -59,10 +59,10 @@ cd "${BASE_DIR}/examples"
 DATA_DIR="${BASE_DIR}/data/yousician"
 SPLIT_JSON_DIR="${DATA_DIR}/split_json"
 TARGET_JSON="${DATA_DIR}/yousician_ukulele.json"
-FM4_DATA_DIR="${DATA_DIR}/yousician_fm4"
+FMKC_DATA_DIR="${DATA_DIR}/yousician_fmkc"
 
 mkdir -p logs
-mkdir -p "${FM4_DATA_DIR}"
+mkdir -p "${FMKC_DATA_DIR}"
 
 # 3) 从训练日志中提取 save_dir
 extract_save_dir() {
@@ -133,15 +133,15 @@ echo "  PWD              : $(pwd)"
 echo "  BASE_DIR         : ${BASE_DIR}"
 echo "  SPLIT_JSON_DIR   : ${SPLIT_JSON_DIR}"
 echo "  TARGET_JSON      : ${TARGET_JSON}"
-echo "  FM4_DATA_DIR     : ${FM4_DATA_DIR}"
+echo "  FMKC_DATA_DIR    : ${FMKC_DATA_DIR}"
 log_banner_end "JOB HEADER"
 
-log_banner "PIPELINE: split_json 中每个 JSON -> yousician (qid) + yousician_fm4 (qid_fm4)"
+log_banner "PIPELINE: split_json 中每个 JSON -> yousician (qid) + yousician_fmkc (qid_fmkc)"
 log_ts "流程说明:"
 echo "  对每个 split_json/*.json : 复制为 yousician_ukulele.json"
 echo "    A) preprocess yousician  -> AKT emb_type=qid    -> predict"
-echo "    B) preprocess yousician_fm4 -> AKT emb_type=qid_fm4 -> predict"
-log_banner_end "PIPELINE: split_json 中每个 JSON -> yousician (qid) + yousician_fm4 (qid_fm4)"
+echo "    B) preprocess yousician_fmkc -> AKT emb_type=qid_fmkc -> predict"
+log_banner_end "PIPELINE: split_json 中每个 JSON -> yousician_fmkc (qid_fmkc)"
 
 JOB_T0=$SECONDS
 
@@ -187,16 +187,16 @@ for SRC_JSON in "${json_files[@]}"; do
 
     run_akt_train_predict "yousician" "qid" "${tag}" "akt_qid"
 
-    # ---------- FM4 KC + AKT (qid_fm4) ----------
-    log_sub "[${json_idx}/${total_json}] STEP B | preprocess | dataset=yousician_fm4 | FM4 KC | tag=${tag}"
-    mkdir -p "${FM4_DATA_DIR}"
-    echo "  -> 清理 pkl: ${FM4_DATA_DIR}/*.pkl"
-    rm -f "${FM4_DATA_DIR}"/*.pkl
-    echo "  -> 运行: python -u data_preprocess.py --dataset_name=yousician_fm4"
-    python -u data_preprocess.py --dataset_name=yousician_fm4
+    # ---------- FMKC + AKT (qid_fmkc) ----------
+    log_sub "[${json_idx}/${total_json}] STEP B | preprocess | dataset=yousician_fmkc | FMKC | tag=${tag}"
+    mkdir -p "${FMKC_DATA_DIR}"
+    echo "  -> 清理 pkl: ${FMKC_DATA_DIR}/*.pkl"
+    rm -f "${FMKC_DATA_DIR}"/*.pkl
+    echo "  -> 运行: python -u data_preprocess.py --dataset_name=yousician_fmkc"
+    python -u data_preprocess.py --dataset_name=yousician_fmkc
     log_ts "STEP B preprocess 完成。"
 
-    run_akt_train_predict "yousician_fm4" "qid_fm4" "${tag}" "akt_qid_fm4"
+    run_akt_train_predict "yousician_fmkc" "qid_fmkc" "${tag}" "akt_qid_fmkc"
 
     echo ""
     log_ts "本 split JSON 全部完成 [${json_idx}/${total_json}] tag=${tag} | 本文件累计耗时: $((SECONDS - SPLIT_T0)) 秒"

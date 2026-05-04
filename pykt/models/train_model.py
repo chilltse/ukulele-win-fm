@@ -60,10 +60,16 @@ def cal_loss(model, ys, r, rshft, sm, preloss=[]):
         loss = binary_cross_entropy(y_next.double(), r_next.double())
 
         loss_r = binary_cross_entropy(y_curr.double(), r_curr.double()) # if answered wrong for C in t-1, cur answer for C should be wrong too
-        loss_w1 = torch.masked_select(torch.norm(ys[2][:, 1:] - ys[2][:, :-1], p=1, dim=-1), sm[:, 1:])
-        loss_w1 = loss_w1.mean() / model.num_c
-        loss_w2 = torch.masked_select(torch.norm(ys[2][:, 1:] - ys[2][:, :-1], p=2, dim=-1) ** 2, sm[:, 1:])
-        loss_w2 = loss_w2.mean() / model.num_c
+        if getattr(model, "emb_type", "") == "qid_fmkc":
+            # y_curr has shape aligned with sm (B, T). Use its temporal diff so mask sm[:,1:] matches.
+            diff = ys[1][:, 1:] - ys[1][:, :-1]
+            loss_w1 = torch.masked_select(torch.abs(diff), sm[:, 1:]).mean()
+            loss_w2 = torch.masked_select(diff ** 2, sm[:, 1:]).mean()
+        else:
+            loss_w1 = torch.masked_select(torch.norm(ys[2][:, 1:] - ys[2][:, :-1], p=1, dim=-1), sm[:, 1:])
+            loss_w1 = loss_w1.mean() / model.num_c
+            loss_w2 = torch.masked_select(torch.norm(ys[2][:, 1:] - ys[2][:, :-1], p=2, dim=-1) ** 2, sm[:, 1:])
+            loss_w2 = loss_w2.mean() / model.num_c
 
         loss = loss + model.lambda_r * loss_r + model.lambda_w1 * loss_w1 + model.lambda_w2 * loss_w2
     elif model_name in ["akt","extrakt","folibikt", "robustkt", "akt_vector", "akt_norasch", "akt_mono", "akt_attn", "aktattn_pos", "aktmono_pos", "akt_raschx", "akt_raschy", "aktvec_raschx","lefokt_akt", "dtransformer", "fluckt"]:
@@ -196,14 +202,25 @@ def model_forward(model, data, rel=None):
         # cat = torch.cat((d["at_seqs"][:,0:1], dshft["at_seqs"]), dim=1)
         cit = torch.cat((dcur["itseqs"][:,0:1], dcur["shft_itseqs"]), dim=1)
     if model_name in ["dkt"]:
-        y = model(c.long(), r.long())
-        y = (y * one_hot(cshft.long(), model.num_c)).sum(-1)
-        ys.append(y) # first: yshft
+        if getattr(model, "emb_type", "") == "qid_fmkc":
+            # DKT-fmkc returns target-conditioned predictions.
+            # Feed full sequence and align y[:,1:] with rshft.
+            y = model(cc.long(), cr.long())[:, 1:]
+        else:
+            y = model(c.long(), r.long())
+            y = (y * one_hot(cshft.long(), model.num_c)).sum(-1)
+        ys.append(y)
     elif model_name == "dkt+":
-        y = model(c.long(), r.long())
-        y_next = (y * one_hot(cshft.long(), model.num_c)).sum(-1)
-        y_curr = (y * one_hot(c.long(), model.num_c)).sum(-1)
-        ys = [y_next, y_curr, y]
+        if getattr(model, "emb_type", "") == "qid_fmkc":
+            y = model(cc.long(), cr.long())
+            y_next = y[:, 1:]
+            y_curr = y[:, :-1]
+            ys = [y_next, y_curr, y]
+        else:
+            y = model(c.long(), r.long())
+            y_next = (y * one_hot(cshft.long(), model.num_c)).sum(-1)
+            y_curr = (y * one_hot(c.long(), model.num_c)).sum(-1)
+            ys = [y_next, y_curr, y]
     elif model_name in ["dkt_forget"]:
         y = model(c.long(), r.long(), dgaps)
         y = (y * one_hot(cshft.long(), model.num_c)).sum(-1)

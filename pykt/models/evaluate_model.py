@@ -101,8 +101,11 @@ def evaluate(model, test_loader, model_name, rel=None, save_path=""):
             elif model_name in ["rekt"]:
                 y = model(dcur)
             elif model_name in ["dkt", "dkt+"]:
-                y = model(c.long(), r.long())
-                y = (y * one_hot(cshft.long(), model.num_c)).sum(-1)
+                if model_name in ["dkt", "dkt+"] and getattr(model, "emb_type", "") == "qid_fmkc":
+                    y = model(cc.long(), cr.long())[:, 1:]
+                else:
+                    y = model(c.long(), r.long())
+                    y = (y * one_hot(cshft.long(), model.num_c)).sum(-1)
             elif model_name in ["dkt_forget"]:
                 y = model(c.long(), r.long(), dgaps)
                 y = (y * one_hot(cshft.long(), model.num_c)).sum(-1)
@@ -225,7 +228,7 @@ def late_fusion(dcur, curdf, fusion_type=["mean", "vote", "all"]):
 
 
 def _concept_step_to_str(s):
-    """Single timestep concept: int (standard) or length-4 list / ndarray (kc_fm4)."""
+    """Single timestep concept: int (standard) or multi-field list / ndarray (kc_fmkc)."""
     if isinstance(s, (list, tuple)):
         return "^".join(str(int(x)) for x in s)
     if isinstance(s, np.ndarray) and s.size > 1:
@@ -471,8 +474,11 @@ def evaluate_question(model, test_loader, model_name, fusion_type=["early_fusion
                 y = model(dcurori)#c.long(), r.long(), q.long())
                 y = (y * one_hot(cshft.long(), model.num_c)).sum(-1)
             elif model_name in ["dkt", "dkt+"]:
-                y = model(c.long(), r.long())
-                y = (y * one_hot(cshft.long(), model.num_c)).sum(-1)
+                if model_name in ["dkt", "dkt+"] and getattr(model, "emb_type", "") == "qid_fmkc":
+                    y = model(cc.long(), cr.long())[:, 1:]
+                else:
+                    y = model(c.long(), r.long())
+                    y = (y * one_hot(cshft.long(), model.num_c)).sum(-1)
             elif model_name in ["dkt_forget"]:
                 y = model(c.long(), r.long(), dgaps)
                 y = (y * one_hot(cshft.long(), model.num_c)).sum(-1)
@@ -878,9 +884,15 @@ def predict_each_group(dtotal, dcur, dforget, curdforget, is_repeat, qidx, uid, 
             sdout = None if csd.shape[0] == 0 else csd.long()[k]
             qdout = None if cqd.shape[0] == 0 else cqd.long()[k]
         if model_name in ["dkt", "dkt+"]:
-            y = model(cin.long(), rin.long())
-            # print(y)
-            pred = y[0][-1][cout.item()]
+            if model_name in ["dkt", "dkt+"] and getattr(model, "emb_type", "") == "qid_fmkc":
+                curc = cout.view(1, 1).to(device)
+                cin_pred = torch.cat((cin, curc), axis=1)
+                rin_pred = torch.cat((rin, torch.zeros_like(curc)), axis=1)
+                y = model(cin_pred.long(), rin_pred.long())
+                pred = y[0, -1]
+            else:
+                y = model(cin.long(), rin.long())
+                pred = y[0][-1][cout.item()]
         if model_name in ["dkt_forget", "datakt"]:
             din = dict()
             for key in curdforget:
@@ -900,15 +912,24 @@ def predict_each_group(dtotal, dcur, dforget, curdforget, is_repeat, qidx, uid, 
             y = model(dcurinfos)
             pred = y[0][-1][cout.item()]
         elif model_name in ["dkt", "dkt+"]:
-            y = model(cin.long(), rin.long())
-            # print(y)
-            pred = y[0][-1][cout.item()]
+            if model_name in ["dkt", "dkt+"] and getattr(model, "emb_type", "") == "qid_fmkc":
+                curc = cout.view(1, 1).to(device)
+                cin_pred = torch.cat((cin, curc), axis=1)
+                rin_pred = torch.cat((rin, torch.zeros_like(curc)), axis=1)
+                y = model(cin_pred.long(), rin_pred.long())
+                pred = y[0, -1]
+            else:
+                y = model(cin.long(), rin.long())
+                pred = y[0][-1][cout.item()]
         elif model_name == "dkt_forget":
             # y = model(cin.long(), rin.long(), din, dcur)
             y = model(cin.long(), rin.long(), dgaps)
             pred = y[0][-1][cout.item()]
         elif model_name in ["kqn", "sakt"]:
-            curc = torch.tensor([[cout.item()]]).to(device)
+            if model_name == "sakt" and getattr(model, "emb_type", "") == "qid_fmkc":
+                curc = cout.view(1, 1, -1).to(device)
+            else:
+                curc = torch.tensor([[cout.item()]]).to(device)
             cshft = torch.cat((cin[:,1:],curc), axis=1)
             y = model(cin.long(), rin.long(), cshft.long())
             pred = y[0][-1]
@@ -1069,7 +1090,8 @@ def predict_each_group(dtotal, dcur, dforget, curdforget, is_repeat, qidx, uid, 
         # output
         clist, rlist = cin.squeeze(0).long().tolist()[0:k], rin.squeeze(0).long().tolist()[0:k]
         # print("\t".join([str(idx), str(uid), str(k), str(qidx), str(is_repeat[t:end]), str(len(clist)), str(clist), str(rlist), str(cout.item()), str(true.item()), str(pred.item()), str(predl)]))
-        fout.write("\t".join([str(idx), str(uid), str(k), str(qidx), str(is_repeat[t:end]), str(len(clist)), str(clist), str(rlist), str(cout.item()), str(true.item()), str(pred.item()), str(predl)]) + "\n")
+        cout_str = _concept_step_to_str(cout.detach().cpu().numpy())
+        fout.write("\t".join([str(idx), str(uid), str(k), str(qidx), str(is_repeat[t:end]), str(len(clist)), str(clist), str(rlist), cout_str, str(true.item()), str(pred.item()), str(predl)]) + "\n")
     # nextcin, nextrin = nextcin.unsqueeze(0), nextrin.unsqueeze(0)
     if model_name == "lpkt":
         return nextqin, nextcin, nextrin, nexttin, nextitin, nextdforget, ctrues, cpreds
@@ -1316,8 +1338,11 @@ def predict_each_group2(dtotal, dcur, dforget, curdforget, is_repeat, qidx, uid,
             y = model(dcurinfos)
             y = (y * one_hot(curcshft.long(), model.num_c)).sum(-1)
         elif model_name in ["dkt", "dkt+"]:
-            y = model(curc.long(), curr.long())
-            y = (y * one_hot(curcshft.long(), model.num_c)).sum(-1)
+            if model_name in ["dkt", "dkt+"] and getattr(model, "emb_type", "") == "qid_fmkc":
+                y = model(ccc.long(), ccr.long())[:, 1:]
+            else:
+                y = model(curc.long(), curr.long())
+                y = (y * one_hot(curcshft.long(), model.num_c)).sum(-1)
         elif model_name in ["dkt_forget"]:
             y = model(curc.long(), curr.long(), dgaps)
             # y = model(curc.long(), curr.long(), curd, curdshft)

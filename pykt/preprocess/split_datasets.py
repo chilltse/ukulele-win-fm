@@ -161,12 +161,13 @@ def id_mapping(df):
     return finaldf, dkeyid2idx
 
 
-def id_mapping_fm4(df):
-    """Map yousician_fm4 concepts raw0|raw1|raw2|raw3 -> integer ids per field; CSV cell i0^i1^i2^i3."""
+def id_mapping_fmkc(df):
+    """Map multi-field concepts raw0|raw1|... -> ids per field; CSV cell i0^i1^..."""
     id_keys = ["questions", "concepts", "uid"]
     dres = dict()
-    dkeyid2idx = {"concepts_fm4": [{}, {}, {}, {}]}
-    print(f"df.columns (fm4): {df.columns}")
+    dkeyid2idx = {}
+    num_fields = None
+    print(f"df.columns (fmkc): {df.columns}")
     for key in df.columns:
         if key not in id_keys:
             dres[key] = df[key]
@@ -179,14 +180,17 @@ def id_mapping_fm4(df):
                 new_cs = []
                 for token in row["concepts"].split(","):
                     parts = token.split("|")
-                    if len(parts) != 4:
+                    if num_fields is None:
+                        num_fields = len(parts)
+                        dkeyid2idx["concepts_fmkc"] = [{} for _ in range(num_fields)]
+                    if len(parts) != num_fields:
                         raise ValueError(
-                            "kc_fm4 expects 4 fields separated by | in each concept token, "
+                            f"kc_fmkc expects {num_fields} fields separated by | in each token, "
                             f"got {len(parts)} in {token!r}"
                         )
                     ids = []
-                    for j in range(4):
-                        field_d = dkeyid2idx["concepts_fm4"][j]
+                    for j in range(num_fields):
+                        field_d = dkeyid2idx["concepts_fmkc"][j]
                         p = parts[j]
                         if p not in field_d:
                             field_d[p] = len(field_d)
@@ -204,7 +208,6 @@ def id_mapping_fm4(df):
             dres[key].append(",".join(curids))
     finaldf = pd.DataFrame(dres)
     return finaldf, dkeyid2idx
-
 
 def train_test_split(df, test_ratio=0.2):
     df = df.sample(frac=1.0, random_state=1024)
@@ -528,8 +531,8 @@ def write_config(dataset_name, dkeyid2idx, effective_keys, configf, dpath, k=5, 
         num_q = len(dkeyid2idx["questions"])
     if "concepts" in effective_keys:
         input_type.append("concepts")
-        if "concepts_fm4" in dkeyid2idx:
-            num_c = max(len(dkeyid2idx["concepts_fm4"][i]) for i in range(4))
+        if "concepts_fmkc" in dkeyid2idx:
+            num_c = max(len(field_d) for field_d in dkeyid2idx["concepts_fmkc"])
         else:
             num_c = len(dkeyid2idx["concepts"])
     folds = list(range(0, k))
@@ -549,11 +552,10 @@ def write_config(dataset_name, dkeyid2idx, effective_keys, configf, dpath, k=5, 
         "test_file": "test_sequences.csv",
         "test_window_file": "test_window_sequences.csv"
     }
-    if "concepts_fm4" in dkeyid2idx:
-        dconfig["kc_fm4"] = True
-        dconfig["num_c_fm4"] = [
-            len(dkeyid2idx["concepts_fm4"][i]) for i in range(4)
-        ]
+    if "concepts_fmkc" in dkeyid2idx:
+        c_fields = dkeyid2idx["concepts_fmkc"]
+        dconfig["kc_fmkc"] = True
+        dconfig["num_c_fmkc"] = [len(field_d) for field_d in c_fields]
     dconfig.update(other_config)
     if flag:
         dconfig["test_question_file"] = "test_question_sequences.csv"
@@ -656,8 +658,8 @@ def main(dname, fname, dataset_name, configf, min_seq_len=3, maxlen=200, kfold=5
         f"original total interactions: {oris}, qs: {qs}, cs: {cs}, seqnum: {seqnum}")
 
     total_df, effective_keys = extend_multi_concepts(total_df, effective_keys)
-    if dataset_name == "yousician_fm4":
-        total_df, dkeyid2idx = id_mapping_fm4(total_df)
+    if dataset_name == "yousician_fmkc":
+        total_df, dkeyid2idx = id_mapping_fmkc(total_df)
     else:
         total_df, dkeyid2idx = id_mapping(total_df)
     dkeyid2idx["max_concepts"] = max_concepts
