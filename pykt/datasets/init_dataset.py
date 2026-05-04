@@ -17,7 +17,7 @@ from .pretrain_utils import get_pretrain_data
 
 def init_test_datasets(data_config, model_name, batch_size, diff_level=None, args=None, re_mapping=False):
     dataset_name = data_config["dataset_name"]
-    _kc_fm4 = data_config.get("kc_fm4", False)
+    _kc_fmkc = data_config.get("kc_fmkc", False)
     print(f"model_name is {model_name}, dataset_name is {dataset_name}")
     test_question_loader, test_question_window_loader = None, None
     if model_name in ["dkt_forget", "bakt_time"]:
@@ -35,11 +35,11 @@ def init_test_datasets(data_config, model_name, batch_size, diff_level=None, arg
         test_question_dataset = None
         test_question_window_dataset= None
     elif model_name in ["rkt"] and dataset_name in ["statics2011", "assist2015", "poj"]:
-        test_dataset = KTDataset(os.path.join(data_config["dpath"], data_config["test_file"]), data_config["input_type"], {-1}, kc_fm4=_kc_fm4)
-        test_window_dataset = KTDataset(os.path.join(data_config["dpath"], data_config["test_window_file"]), data_config["input_type"], {-1}, kc_fm4=_kc_fm4)
+        test_dataset = KTDataset(os.path.join(data_config["dpath"], data_config["test_file"]), data_config["input_type"], {-1}, kc_fmkc=_kc_fmkc)
+        test_window_dataset = KTDataset(os.path.join(data_config["dpath"], data_config["test_window_file"]), data_config["input_type"], {-1}, kc_fmkc=_kc_fmkc)
         if "test_question_file" in data_config:
-            test_question_dataset = KTDataset(os.path.join(data_config["dpath"], data_config["test_question_file"]), data_config["input_type"], {-1}, True, kc_fm4=_kc_fm4)
-            test_question_window_dataset = KTDataset(os.path.join(data_config["dpath"], data_config["test_question_window_file"]), data_config["input_type"], {-1}, True, kc_fm4=_kc_fm4)
+            test_question_dataset = KTDataset(os.path.join(data_config["dpath"], data_config["test_question_file"]), data_config["input_type"], {-1}, True, kc_fmkc=_kc_fmkc)
+            test_question_window_dataset = KTDataset(os.path.join(data_config["dpath"], data_config["test_question_window_file"]), data_config["input_type"], {-1}, True, kc_fmkc=_kc_fmkc)
     elif model_name in que_type_models:
         if model_name not in ["promptkt", "unikt"]:
             test_dataset = KTQueDataset(os.path.join(data_config["dpath"], data_config["test_file_quelevel"]),
@@ -103,11 +103,11 @@ def init_test_datasets(data_config, model_name, batch_size, diff_level=None, arg
             test_question_dataset = DIMKTDataset(data_config["dpath"],os.path.join(data_config["dpath"], data_config["test_question_file"]), data_config["input_type"], {-1}, True, diff_level=diff_level)
             test_question_window_dataset = DIMKTDataset(data_config["dpath"],os.path.join(data_config["dpath"], data_config["test_question_window_file"]), data_config["input_type"], {-1}, True, diff_level=diff_level)
     else:
-        test_dataset = KTDataset(os.path.join(data_config["dpath"], data_config["test_file"]), data_config["input_type"], {-1}, kc_fm4=_kc_fm4)
-        test_window_dataset = KTDataset(os.path.join(data_config["dpath"], data_config["test_window_file"]), data_config["input_type"], {-1}, kc_fm4=_kc_fm4)
+        test_dataset = KTDataset(os.path.join(data_config["dpath"], data_config["test_file"]), data_config["input_type"], {-1}, kc_fmkc=_kc_fmkc)
+        test_window_dataset = KTDataset(os.path.join(data_config["dpath"], data_config["test_window_file"]), data_config["input_type"], {-1}, kc_fmkc=_kc_fmkc)
         if "test_question_file" in data_config:
-            test_question_dataset = KTDataset(os.path.join(data_config["dpath"], data_config["test_question_file"]), data_config["input_type"], {-1}, True, kc_fm4=_kc_fm4)
-            test_question_window_dataset = KTDataset(os.path.join(data_config["dpath"], data_config["test_question_window_file"]), data_config["input_type"], {-1}, True, kc_fm4=_kc_fm4)
+            test_question_dataset = KTDataset(os.path.join(data_config["dpath"], data_config["test_question_file"]), data_config["input_type"], {-1}, True, kc_fmkc=_kc_fmkc)
+            test_question_window_dataset = KTDataset(os.path.join(data_config["dpath"], data_config["test_question_window_file"]), data_config["input_type"], {-1}, True, kc_fmkc=_kc_fmkc)
 
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
     test_window_loader = DataLoader(test_window_dataset, batch_size=batch_size, shuffle=False)
@@ -131,7 +131,7 @@ def init_dataset4train(dataset_name, model_name, data_config, i, batch_size, dif
     print(f"dataset_name:{dataset_name}")
     print(f"data_config:{data_config}")
     data_config = data_config[dataset_name]
-    _kc_fm4 = data_config.get("kc_fm4", False)
+    _kc_fmkc = data_config.get("kc_fmkc", False)
     all_folds = set(data_config["folds"])
     if model_name in ["dkt_forget", "bakt_time"]:
         max_rgap, max_sgap, max_pcount = 0, 0, 0
@@ -150,8 +150,8 @@ def init_dataset4train(dataset_name, model_name, data_config, i, batch_size, dif
         curvalid = LPKTDataset(os.path.join(data_config["dpath"], data_config["train_valid_file_quelevel"]), at2idx, it2idx, data_config["input_type"], {i})
         curtrain = LPKTDataset(os.path.join(data_config["dpath"], data_config["train_valid_file_quelevel"]), at2idx, it2idx, data_config["input_type"], all_folds - {i})
     elif model_name in ["rkt"] and dataset_name in ["statics2011", "assist2015", "poj"]:
-        curvalid = KTDataset(os.path.join(data_config["dpath"], data_config["train_valid_file"]), data_config["input_type"], {i}, kc_fm4=_kc_fm4)
-        curtrain = KTDataset(os.path.join(data_config["dpath"], data_config["train_valid_file"]), data_config["input_type"], all_folds - {i}, kc_fm4=_kc_fm4)
+        curvalid = KTDataset(os.path.join(data_config["dpath"], data_config["train_valid_file"]), data_config["input_type"], {i}, kc_fmkc=_kc_fmkc)
+        curtrain = KTDataset(os.path.join(data_config["dpath"], data_config["train_valid_file"]), data_config["input_type"], all_folds - {i}, kc_fmkc=_kc_fmkc)
     elif model_name in que_type_models:
         if model_name in ["promptkt"]:
             dataset_name = args.dataset_name
@@ -205,8 +205,8 @@ def init_dataset4train(dataset_name, model_name, data_config, i, batch_size, dif
         curvalid = DIMKTDataset(data_config["dpath"],os.path.join(data_config["dpath"], data_config["train_valid_file"]), data_config["input_type"], {i}, diff_level=diff_level)
         curtrain = DIMKTDataset(data_config["dpath"],os.path.join(data_config["dpath"], data_config["train_valid_file"]), data_config["input_type"], all_folds - {i}, diff_level=diff_level)
     else:
-        curvalid = KTDataset(os.path.join(data_config["dpath"], data_config["train_valid_file"]), data_config["input_type"], {i}, kc_fm4=_kc_fm4)
-        curtrain = KTDataset(os.path.join(data_config["dpath"], data_config["train_valid_file"]), data_config["input_type"], all_folds - {i}, kc_fm4=_kc_fm4)
+        curvalid = KTDataset(os.path.join(data_config["dpath"], data_config["train_valid_file"]), data_config["input_type"], {i}, kc_fmkc=_kc_fmkc)
+        curtrain = KTDataset(os.path.join(data_config["dpath"], data_config["train_valid_file"]), data_config["input_type"], all_folds - {i}, kc_fmkc=_kc_fmkc)
     train_loader = DataLoader(curtrain, batch_size=batch_size)
     valid_loader = DataLoader(curvalid, batch_size=batch_size)
     

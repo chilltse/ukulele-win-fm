@@ -33,7 +33,7 @@ class AKT(nn.Module):
         emb_type="qid",
         emb_path="",
         pretrain_dim=768,
-        num_c_fm4=None,
+        num_c_fmkc=None,
     ):
         super().__init__()
 
@@ -55,34 +55,34 @@ class AKT(nn.Module):
         self.model_type = self.model_name
         self.separate_qa = separate_qa
         self.emb_type = emb_type
-        self.num_c_fm4 = num_c_fm4
+        self.num_c_fmkc = num_c_fmkc
 
         embed_l = d_model
 
         # ------------------------------------------------------------------
         # General factorized KC embedding branch
         # ------------------------------------------------------------------
-        if emb_type == "qid_fm4":
-            if num_c_fm4 is None or len(num_c_fm4) < 1:
+        if emb_type == "qid_fmkc":
+            if num_c_fmkc is None or len(num_c_fmkc) < 1:
                 raise ValueError(
-                    "emb_type qid_fm4 requires num_c_fm4 with at least one field"
+                    "emb_type qid_fmkc requires num_c_fmkc with at least one field"
                 )
 
             if separate_qa:
-                raise ValueError("qid_fm4 does not support separate_qa")
+                raise ValueError("qid_fmkc does not support separate_qa")
 
             # General FM-KC setting:
-            # num_c_fm4 can now contain any number of factor fields.
+            # num_c_fmkc can now contain any number of factor fields.
             #
             # Example FM4:
             #   [prev_pitches, prev_strings, pitches, strings]
             #
             # Example FM5:
             #   [prev_pitches, prev_strings, pitches, strings, duration]
-            self.num_fm_fields = len(num_c_fm4)
+            self.num_fm_fields = len(num_c_fmkc)
 
             self.kc_emb = nn.ModuleList(
-                [nn.Embedding(int(n), embed_l) for n in num_c_fm4]
+                [nn.Embedding(int(n), embed_l) for n in num_c_fmkc]
             )
 
             # Field-wise and dimension-wise learnable weights for first-order terms.
@@ -104,11 +104,11 @@ class AKT(nn.Module):
             # problem difficulty scalar: u_q
             self.difficult_param = nn.Embedding(self.n_pid + 1, 1)
 
-            # For qid_fm4, q_embed_diff is indexed by pid_data.
+            # For qid_fmkc, q_embed_diff is indexed by pid_data.
             # For normal qid, q_embed_diff is indexed by q_data.
             qdiff_rows = (
                 self.n_pid + 1
-                if emb_type == "qid_fm4"
+                if emb_type == "qid_fmkc"
                 else self.n_question + 1
             )
 
@@ -120,7 +120,7 @@ class AKT(nn.Module):
         # ------------------------------------------------------------------
         # Base embeddings
         # ------------------------------------------------------------------
-        if emb_type == "qid_fm4":
+        if emb_type == "qid_fmkc":
             # response embedding only: target is 0 or 1
             self.qa_embed = nn.Embedding(2, embed_l)
 
@@ -166,7 +166,7 @@ class AKT(nn.Module):
             Only reset difficult_param to zero.
 
         Do NOT reset all parameters whose first dimension equals n_pid + 1.
-        In qid_fm4, q_embed_diff also has n_pid + 1 rows.
+        In qid_fmkc, q_embed_diff also has n_pid + 1 rows.
         If q_embed_diff is also zeroed, the Rasch / problem difficulty branch
         can become too weak or nearly dead at initialization.
         """
@@ -297,7 +297,7 @@ class AKT(nn.Module):
         return out
 
     def base_emb(self, q_data, target):
-        if self.emb_type == "qid_fm4":
+        if self.emb_type == "qid_fmkc":
             q_embed_data = self.fm_kc_embed(q_data)
         else:
             q_embed_data = self.q_embed(q_data)
@@ -331,8 +331,8 @@ class AKT(nn.Module):
 
             pid_ids = pid_data.long().clamp(min=0)
 
-            if self.emb_type == "qid_fm4":
-                # qid_fm4 uses pid ids for q_embed_diff.
+            if self.emb_type == "qid_fmkc":
+                # qid_fmkc uses pid ids for q_embed_diff.
                 q_embed_diff_data = self.q_embed_diff(pid_ids)
             else:
                 # Original AKT qid mode uses q_data for q_embed_diff.

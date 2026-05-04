@@ -42,23 +42,32 @@ device = "cpu" if not torch.cuda.is_available() else "cuda"
 
 def init_model(model_name, model_config, data_config, emb_type):
     if model_name == "dkt":
-        model = DKT(data_config["num_c"], **model_config, emb_type=emb_type, emb_path=data_config["emb_path"]).to(device)
+        dkt_kw = {"emb_type": emb_type, "emb_path": data_config["emb_path"]}
+        if emb_type == "qid_fmkc":
+            dkt_kw["num_c_fmkc"] = data_config["num_c_fmkc"]
+        model = DKT(data_config["num_c"], **model_config, **dkt_kw).to(device)
     elif model_name == "dkt+":
-        model = DKTPlus(data_config["num_c"], **model_config, emb_type=emb_type, emb_path=data_config["emb_path"]).to(device)
+        dktplus_kw = {"emb_type": emb_type, "emb_path": data_config["emb_path"]}
+        if emb_type == "qid_fmkc":
+            dktplus_kw["num_c_fmkc"] = data_config["num_c_fmkc"]
+        model = DKTPlus(data_config["num_c"], **model_config, **dktplus_kw).to(device)
     elif model_name == "dkvmn":
         model = DKVMN(data_config["num_c"], **model_config, emb_type=emb_type, emb_path=data_config["emb_path"]).to(device)
     elif model_name == "deep_irt":
         model = DeepIRT(data_config["num_c"], **model_config, emb_type=emb_type, emb_path=data_config["emb_path"]).to(device)
     elif model_name == "sakt":
-        model = SAKT(data_config["num_c"],  **model_config, emb_type=emb_type, emb_path=data_config["emb_path"]).to(device)
+        sakt_kw = {"emb_type": emb_type, "emb_path": data_config["emb_path"]}
+        if emb_type == "qid_fmkc":
+            sakt_kw["num_c_fmkc"] = data_config["num_c_fmkc"]
+        model = SAKT(data_config["num_c"],  **model_config, **sakt_kw).to(device)
     elif model_name == "saint":
         model = SAINT(data_config["num_q"], data_config["num_c"], **model_config, emb_type=emb_type, emb_path=data_config["emb_path"]).to(device)
     elif model_name == "dkt_forget":
         model = DKTForget(data_config["num_c"], data_config["num_rgap"], data_config["num_sgap"], data_config["num_pcount"], **model_config).to(device)
     elif model_name == "akt":
         akt_kw = {"emb_type": emb_type, "emb_path": data_config["emb_path"]}
-        if emb_type == "qid_fm4":
-            akt_kw["num_c_fm4"] = data_config["num_c_fm4"]
+        if emb_type == "qid_fmkc":
+            akt_kw["num_c_fmkc"] = data_config["num_c_fmkc"]
         model = AKT(
             data_config["num_c"],
             data_config["num_q"],
@@ -124,7 +133,10 @@ def init_model(model_name, model_config, data_config, emb_type):
     elif model_name == "datakt":
         model = BAKTTime(data_config["num_c"], data_config["num_q"], data_config["num_rgap"], data_config["num_sgap"], data_config["num_pcount"], **model_config, emb_type=emb_type, emb_path=data_config["emb_path"]).to(device)
     elif model_name == "simplekt":
-        model = simpleKT(data_config["num_c"], data_config["num_q"], **model_config, emb_type=emb_type, emb_path=data_config["emb_path"]).to(device)
+        simplekt_kw = {"emb_type": emb_type, "emb_path": data_config["emb_path"]}
+        if emb_type == "qid_fmkc":
+            simplekt_kw["num_c_fmkc"] = data_config["num_c_fmkc"]
+        model = simpleKT(data_config["num_c"], data_config["num_q"], **model_config, **simplekt_kw).to(device)
     elif model_name == "rekt":
         model = ReKT(data_config["num_c"], data_config["num_q"], **model_config, emb_type=emb_type).to(device)
     elif model_name == "stablekt":

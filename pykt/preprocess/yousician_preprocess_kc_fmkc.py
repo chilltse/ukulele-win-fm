@@ -2,9 +2,9 @@ import json
 import pandas as pd
 from .utils import sta_infos, write_txt
 
-# KC 四维（与 yousician_preprocess 一致）：prev_pitches | prev_strings | pitches | strings
-# 本文件将四列以原始字符串用 "|" 连接写入 skills 行，供 split 阶段按域独立建词典；
-# 序列 CSV 中每步概念为 i0^i1^i2^i3（split_datasets.id_mapping_fm4）。
+# KC 多域（与 yousician_preprocess 一致）：prev_pitches | prev_strings | pitches | strings
+# 本文件将多域原始字符串用 "|" 连接写入 skills 行，供 split 阶段按域独立建词典；
+# 序列 CSV 中每步概念为 i0^i1^...（split_datasets.id_mapping_fmkc）。
 
 KEYS = ["user_id", "sequence_id"]
 
@@ -17,7 +17,7 @@ def sanitize_field(x, sep="^"):
 
 
 def _events_to_event_rows(events_data_str):
-    """每事件输出 question_id（四域拼接）与 KC 四域字符串 raw0|raw1|raw2|raw3。"""
+    """每事件输出 question_id（多域拼接）与 KC 多域字符串 raw0|raw1|...。"""
     data = json.loads(events_data_str)
     inner = data.get("data", data)
 
@@ -37,9 +37,9 @@ def _events_to_event_rows(events_data_str):
         prev_ss = "inf" if i == 0 else sanitize_field(str(strings[i - 1]), sep="^")
 
         qid = f"{prev_ps}|{prev_ss}|{pitch_s}|{string_s}"
-        kc_four = f"{prev_ps}|{prev_ss}|{pitch_s}|{string_s}"
+        kc_multi = f"{prev_ps}|{prev_ss}|{pitch_s}|{string_s}"
         resp = 1 if reject_reason[i] == 0 else 0
-        out.append((qid, kc_four, resp))
+        out.append((qid, kc_multi, resp))
 
     return out
 
@@ -64,7 +64,7 @@ def read_data_from_json(read_file, write_file):
             event_list = _events_to_event_rows(r["events_data"])
         except (KeyError, TypeError, json.JSONDecodeError):
             continue
-        for qid, kc_four, resp in event_list:
+        for qid, kc_multi, resp in event_list:
             rows.append(
                 {
                     "user_id": uid,
@@ -72,7 +72,7 @@ def read_data_from_json(read_file, write_file):
                     "exercise_part_index": part,
                     "session_index": sess,
                     "question_id": qid,
-                    "sequence_id": kc_four,
+                    "sequence_id": kc_multi,
                     "correct": resp,
                 }
             )

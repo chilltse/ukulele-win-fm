@@ -477,13 +477,13 @@
     },
     "yousician": {
         "dpath": "../data/yousician",
-        "num_q": 1062,
-        "num_c": 40,
+        "num_q": 2353,
+        "num_c": 2353,
         "input_type": [
             "questions",
             "concepts"
         ],
-        "max_concepts": 1,
+        "max_concepts": 13,
         "min_seq_len": 3,
         "maxlen": 200,
         "emb_path": "",
@@ -507,17 +507,17 @@
         "test_window_file_quelevel": "test_window_sequences_quelevel.csv",
         "test_original_file_quelevel": "test_quelevel.csv"
     },
-    "yousician_fm4": {
-        "dpath": "F:\\ANU_course\\pykt-ukulele-May-WIN\\pykt-ukelele\\data\\yousician\\yousician_fm4",
-        "num_q": 2353,
-        "num_c": 2353,
-        "num_c_fm4": [
-            217,
+    "yousician_fmkc": {
+        "dpath": "F:\\ANU_course\\pykt-ukulele-May-WIN\\pykt-ukelele\\data\\yousician\\yousician_fmkc",
+        "num_q": 131,
+        "num_c": 131,
+        "num_c_fmkc": [
+            22,
+            6,
             21,
-            223,
-            22
+            5
         ],
-        "kc_fm4": true,
+        "kc_fmkc": true,
         "input_type": [
             "questions",
             "concepts"
