@@ -10,8 +10,9 @@ data/yousician/experiments_report
 data/xes3g5m
 data/eedi
 dist/
-data/yousician/*/*.json
-data/yousician/*/*.csv
+data/yousician/**/*.json
+data/yousician/**/*.csv
+data/split_json/
 .DS_Store
 wandb_info_collection/
 *.egg-info/
