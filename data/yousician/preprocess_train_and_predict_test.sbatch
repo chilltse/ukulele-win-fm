@@ -59,7 +59,7 @@ cd "${BASE_DIR}/examples"
 DATA_DIR="${BASE_DIR}/data/yousician"
 SPLIT_JSON_DIR="${DATA_DIR}/split_json"
 TARGET_JSON="${DATA_DIR}/yousician_ukulele.json"
-FMKC_DATA_DIR="${DATA_DIR}/yousician_fmkc"
+FMKC_DATA_DIR="${BASE_DIR}/data/yousician_fmkc"
 
 mkdir -p logs
 mkdir -p "${FMKC_DATA_DIR}"

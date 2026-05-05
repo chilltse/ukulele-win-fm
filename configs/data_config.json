@@ -508,7 +508,7 @@
         "test_original_file_quelevel": "test_quelevel.csv"
     },
     "yousician_fmkc": {
-        "dpath": "F:\\ANU_course\\pykt-ukulele-May-WIN\\pykt-ukelele\\data\\yousician\\yousician_fmkc",
+        "dpath": "../data/yousician_fmkc",
         "num_q": 131,
         "num_c": 131,
         "num_c_fmkc": [
