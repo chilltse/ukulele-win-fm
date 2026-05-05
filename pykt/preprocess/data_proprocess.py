@@ -56,7 +56,8 @@ def process_raw_data(dataset_name,dname2paths):
         read_data_from_json(readf, writef)
     elif dataset_name == "yousician_fmkc":
         root = os.path.dirname(os.path.abspath(readf))
-        dname = os.path.join(root, "yousician_fmkc")
+        data_root = os.path.dirname(root)
+        dname = os.path.join(data_root, "yousician_fmkc")
         os.makedirs(dname, exist_ok=True)
         writef = os.path.join(dname, "data.txt")
         read_data_from_json_fmkc(readf, writef)
