@@ -30,6 +30,12 @@ data/nips_task34
 data/assist2017
 data/yousician/*.json
 data/yousician/*.csv
+data/yousician/*.txt
+data/yousician/*.pkl
+data/yousician_fmkc/*.json
+data/yousician_fmkc/*.csv
+data/yousician_fmkc/*.txt
+data/yousician_fmkc/*.pkl
 data/poj
 data/slepemapy
 data/junyi2015

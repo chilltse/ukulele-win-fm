@@ -14,6 +14,30 @@
 
 set -euo pipefail
 
+# ============================================================
+# 0) 只选择一个 dataset 跑
+# 可选：
+#   RUN_DATASET="yousician"       -> emb_type=qid
+#   RUN_DATASET="yousician_fmkc"  -> emb_type=qid_fmkc
+# ============================================================
+RUN_DATASET="yousician_fmkc"
+
+case "${RUN_DATASET}" in
+    "yousician")
+        RUN_EMB_TYPE="qid"
+        RUN_CONFIG_LABEL="qid"
+        ;;
+    "yousician_fmkc")
+        RUN_EMB_TYPE="qid_fmkc"
+        RUN_CONFIG_LABEL="qid_fmkc"
+        ;;
+    *)
+        echo "ERROR: Unknown RUN_DATASET=${RUN_DATASET}"
+        echo "Allowed values: yousician, yousician_fmkc"
+        exit 1
+        ;;
+esac
+
 log_ts() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')]" "$@"
 }
@@ -54,9 +78,8 @@ cd "${BASE_DIR}/examples"
 
 mkdir -p logs
 
-echo "运行: python -u data_preprocess.py --dataset_name=yousician"
-python -u data_preprocess.py --dataset_name=yousician
-python -u data_preprocess.py --dataset_name=yousician_fmkc
+echo "运行: python -u data_preprocess.py --dataset_name=${RUN_DATASET}"
+python -u data_preprocess.py --dataset_name="${RUN_DATASET}"
 echo "STEP A preprocess 完成。"
 
 # ---------- 3) predict 脚本 ----------
@@ -76,11 +99,11 @@ MODELS=(
 )
 
 # ---------- 5) 数据配置 ----------
+# 这里只放一个 config，由最开头的 RUN_DATASET 控制
 # 格式：
 # dataset_name:emb_type:config_label
 CONFIGS=(
-    "yousician:qid:qid"
-    "yousician_fmkc:qid_fmkc:qid_fmkc"
+    "${RUN_DATASET}:${RUN_EMB_TYPE}:${RUN_CONFIG_LABEL}"
 )
 
 # ---------- 6) 从训练日志中提取 save_dir ----------
@@ -164,11 +187,14 @@ echo "  PWD              : $(pwd)"
 echo "  BASE_DIR         : ${BASE_DIR}"
 echo "  PREDICT_SCRIPT   : ${PREDICT_SCRIPT}"
 echo "  GPU REQUEST      : --gres=gpu:a100:1"
+echo "  RUN_DATASET      : ${RUN_DATASET}"
+echo "  RUN_EMB_TYPE     : ${RUN_EMB_TYPE}"
+echo "  RUN_CONFIG_LABEL : ${RUN_CONFIG_LABEL}"
 echo "  MODELS           : ${MODELS[*]}"
 echo "  CONFIGS          : ${CONFIGS[*]}"
 log_banner_end "JOB HEADER"
 
-log_banner "PIPELINE: Train + Predict qid and qid_fmkc"
+log_banner "PIPELINE: Train + Predict selected dataset only"
 echo "  This job will sequentially run:"
 echo "    1) DKT        -> wandb_dkt_train.py"
 echo "    2) DKT_plus   -> wandb_dkt_plus_train.py"
@@ -176,15 +202,13 @@ echo "    3) AKT        -> wandb_akt_train.py"
 echo "    4) simpleKT   -> wandb_simplekt_train.py"
 echo "    5) SAKT       -> wandb_sakt_train.py"
 echo ""
-echo "  For each model, it will run:"
-echo "    A) --dataset_name=yousician      --emb_type=qid"
-echo "    B) --dataset_name=yousician_fmkc --emb_type=qid_fmkc"
+echo "  Selected config:"
+echo "    --dataset_name=${RUN_DATASET} --emb_type=${RUN_EMB_TYPE}"
 echo ""
 echo "  No --model_name argument."
 echo "  No JSON copy."
-echo "  No data_preprocess."
-echo "  Only train and predict."
-log_banner_end "PIPELINE: Train + Predict qid and qid_fmkc"
+echo "  Only selected data_preprocess, train, and predict."
+log_banner_end "PIPELINE: Train + Predict selected dataset only"
 
 # ---------- 9) 顺次执行 ----------
 model_idx=0
