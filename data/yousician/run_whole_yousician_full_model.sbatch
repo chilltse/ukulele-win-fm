@@ -79,7 +79,7 @@ cd "${BASE_DIR}/examples"
 mkdir -p logs
 
 echo "运行: python -u data_preprocess.py --dataset_name=${RUN_DATASET}"
-python -u data_preprocess.py --dataset_name="${RUN_DATASET}"
+python -u data_preprocess.py --dataset_name="${RUN_DATASET}" --maxlen=150
 echo "STEP A preprocess 完成。"
 
 # ---------- 3) predict 脚本 ----------
