@@ -9,6 +9,9 @@ examples/wandb/
 data/yousician/experiments_report
 data/xes3g5m
 data/eedi
+data/xes3g5m_tree
+data/dbe_kt22
+data/dbe_kt22_tree
 dist/
 data/yousician/**/*.json
 data/yousician/**/*.csv

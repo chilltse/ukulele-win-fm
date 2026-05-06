@@ -743,8 +743,27 @@ def main(dname, fname, dataset_name, configf, min_seq_len=3, maxlen=200, kfold=5
         print(
             f"test question window interactions num: {ins}, select num: {ss}, qs: {qs}, cs: {cs}, seqnum: {seqnum}")
 
-    write_config(dataset_name=dataset_name, dkeyid2idx=dkeyid2idx, effective_keys=effective_keys,
-                 configf=configf, dpath=dname, k=kfold, min_seq_len=min_seq_len, maxlen=maxlen, flag=flag)
+    other_config = {}
+    if dataset_name in ["dbe_kt22", "dbe_kt22_tree"]:
+        other_config["kc_tree_path"] = os.path.join(
+            dname, "2_DBE_KT22_datafiles_100102_csv", "kc_knowledge_tree_original.json"
+        )
+    elif dataset_name == "xes3g5m_tree":
+        other_config["kc_tree_path"] = os.path.join(
+            dname, "metadata", "kc_knowledge_tree_original.json"
+        )
+    write_config(
+        dataset_name=dataset_name,
+        dkeyid2idx=dkeyid2idx,
+        effective_keys=effective_keys,
+        configf=configf,
+        dpath=dname,
+        k=kfold,
+        min_seq_len=min_seq_len,
+        maxlen=maxlen,
+        flag=flag,
+        other_config=other_config,
+    )
 
     print("="*20)
     print("\n".join(stares))

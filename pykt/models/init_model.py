@@ -42,7 +42,12 @@ device = "cpu" if not torch.cuda.is_available() else "cuda"
 
 def init_model(model_name, model_config, data_config, emb_type):
     if model_name == "dkt":
-        dkt_kw = {"emb_type": emb_type, "emb_path": data_config["emb_path"]}
+        dkt_kw = {
+            "emb_type": emb_type,
+            "emb_path": data_config["emb_path"],
+            "dpath": data_config.get("dpath", ""),
+            "kc_tree_path": data_config.get("kc_tree_path", ""),
+        }
         if emb_type == "qid_fmkc":
             dkt_kw["num_c_fmkc"] = data_config["num_c_fmkc"]
         model = DKT(data_config["num_c"], **model_config, **dkt_kw).to(device)

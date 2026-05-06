@@ -7,6 +7,8 @@ from pykt.preprocess import data_proprocess, process_raw_data
 dname2paths = {
     "yousician": "../data/yousician/yousician_ukulele.json",
     "yousician_fmkc": "../data/yousician_fmkc/yousician_ukulele.json",
+    "dbe_kt22": "../data/dbe_kt22/2_DBE_KT22_Practice_Sequences_100102_json/Practice_Sequences.json",
+    "dbe_kt22_tree": "../data/dbe_kt22_tree/2_DBE_KT22_Practice_Sequences_100102_json/Practice_Sequences.json",
     "assist2009": "../data/assist2009/skill_builder_data_corrected_collapsed.csv",
     "assist2012": "../data/assist2012/2012-2013-data-with-predictions-4-final.csv",
     "assist2015": "../data/assist2015/2015_100_skill_builders_main_problems.csv",
@@ -18,6 +20,7 @@ dname2paths = {
     "slepemapy": "../data/slepemapy/answer.csv",
     "assist2017": "../data/assist2017/anonymized_full_release_competition_dataset.csv",
     "xes3g5m": "../data/xes3g5m/question_level/train_valid_sequences_quelevel.csv",
+    "xes3g5m_tree": "../data/xes3g5m_tree/question_level/train_valid_sequences_quelevel.csv",
     "junyi2015": "../data/junyi2015/junyi_ProblemLog_original.csv",
     "ednet": "../data/ednet/",
     "ednet5w": "../data/ednet/",

@@ -1,9 +1,9 @@
 import json
 import os
 import torch
-from torch.nn import Dropout, Embedding, LSTM, Linear, Module, ModuleList, Parameter, ReLU, Sequential
+from torch.nn import Dropout, Embedding, GELU, LayerNorm, LSTM, Linear, Module, ModuleList, Parameter, ReLU, Sequential
 
-# v1.0.0 leaf and non-leaf
+# 改进版的FMKC结构
 
 class DKT(Module):
     def __init__(
@@ -87,6 +87,50 @@ class DKT(Module):
             # Input interaction FM scales
             self.kcr_fm2_scale = Parameter(torch.tensor(0.1))
             self.kcr_fm_out_scale = Parameter(torch.tensor(1.0))
+
+            # ---------------------------------------------------------
+            # Residual FMKC improvements
+            #
+            # Instead of directly using:
+            #   first + fm2_scale * fm2
+            #
+            # We use:
+            #   LayerNorm(first + bias + gate * fm2_scale * MLP(fm2))
+            #
+            # This keeps the first-order field composition as the main
+            # representation and lets the second-order FM interaction act
+            # as a learnable residual branch.
+            # ---------------------------------------------------------
+
+            # Bias for first-order target KC embedding and interaction embedding.
+            self.fmkc_bias = Parameter(torch.zeros(self.emb_size))
+            self.kcr_fmkc_bias = Parameter(torch.zeros(self.emb_size))
+
+            # Residual gates for second-order FM branches.
+            # Initialize with -3.0 so sigmoid(gate) is small at the beginning.
+            # This makes the model start close to a stable first-order model.
+            self.fmkc_fm2_gate = Parameter(torch.tensor(-3.0))
+            self.kcr_fm2_gate = Parameter(torch.tensor(-3.0))
+
+            # Transform the raw second-order FM vector before residual addition.
+            self.fmkc_fm2_mlp = Sequential(
+                Linear(self.emb_size, self.emb_size),
+                GELU(),
+                Linear(self.emb_size, self.emb_size),
+            )
+            self.kcr_fm2_mlp = Sequential(
+                Linear(self.emb_size, self.emb_size),
+                GELU(),
+                Linear(self.emb_size, self.emb_size),
+            )
+
+            # Normalize after residual addition.
+            self.fmkc_norm = LayerNorm(self.emb_size)
+            self.kcr_fmkc_norm = LayerNorm(self.emb_size)
+
+            # Dropout only on the residual interaction branch.
+            self.fmkc_branch_dropout = Dropout(dropout)
+            self.kcr_fmkc_branch_dropout = Dropout(dropout)
 
         elif emb_type == "qid_tree":
             self.residual_kc_emb = Embedding(self.num_c, self.emb_size)
@@ -369,6 +413,11 @@ class DKT(Module):
         alpha,
         fm2_scale,
         fm_out_scale,
+        bias,
+        fm2_gate,
+        fm2_mlp,
+        norm_layer,
+        branch_dropout,
         r=None,
     ):
         """
@@ -438,11 +487,37 @@ class DKT(Module):
         token_valid = (valid_count > 0).float()
 
         # -------------------------------------------------------------
-        # First-order FM term:
-        #   sum_i alpha_i * e_i
+        # First-order FM term with softmax-normalized field weights.
+        #
+        # Original version:
+        #   sum_i alpha_i * e_i / sqrt(valid_count)
+        #
+        # Improved version:
+        #   sum_i softmax(alpha_i) * e_i
+        #
+        # For every embedding dimension, the valid field weights sum to 1.
+        # This makes the first-order composition more stable and more
+        # interpretable than unconstrained alpha weights.
         # -------------------------------------------------------------
-        alpha = alpha.view(1, 1, self.num_fmkc_fields, self.emb_size)
-        first = (alpha * es).sum(dim=2) / torch.sqrt(valid_count_safe)
+        alpha_logits = alpha.view(1, 1, self.num_fmkc_fields, self.emb_size)
+
+        # field_mask: [B, L, F, 1]
+        field_mask = field_valid_bool.unsqueeze(-1)
+
+        # Invalid fields should not receive first-order weight.
+        alpha_logits = alpha_logits.masked_fill(~field_mask, -1e9)
+
+        # weights: [B, L, F, D]
+        weights = torch.softmax(alpha_logits, dim=2)
+        weights = weights * field_mask.float()
+
+        # Safety renormalization for fully padded / partially missing tokens.
+        weights = weights / weights.sum(dim=2, keepdim=True).clamp(min=1e-8)
+
+        first = (weights * es).sum(dim=2)
+
+        # Add a vector bias to the first-order base representation.
+        base = first + bias.view(1, 1, self.emb_size)
 
         # -------------------------------------------------------------
         # Second-order FM term:
@@ -464,7 +539,27 @@ class DKT(Module):
 
         fm2 = fm2 / torch.sqrt(pair_count_safe)
 
-        out = fm_out_scale * (first + fm2_scale * fm2)
+        # If a token has fewer than two valid fields, it has no true pairwise
+        # interaction. Force its second-order term to zero.
+        has_pair = (valid_count >= 2).float()
+        fm2 = fm2 * has_pair
+
+        # -------------------------------------------------------------
+        # Residual second-order branch:
+        #
+        #   out = LayerNorm(base + gate * fm2_scale * MLP(fm2))
+        #
+        # The small initial gate prevents the FM2 branch from disturbing the
+        # first-order KC semantics too early in training.
+        # -------------------------------------------------------------
+        fm2_branch = fm2_mlp(fm2)
+        fm2_branch = branch_dropout(fm2_branch)
+
+        gate = torch.sigmoid(fm2_gate)
+        out = base + gate * fm2_scale * fm2_branch
+
+        out = norm_layer(out)
+        out = fm_out_scale * out
 
         # Fully mask invalid tokens.
         out = out * token_valid
@@ -489,6 +584,11 @@ class DKT(Module):
             alpha=self.alpha_fm1,
             fm2_scale=self.fm2_scale,
             fm_out_scale=self.fm_out_scale,
+            bias=self.fmkc_bias,
+            fm2_gate=self.fmkc_fm2_gate,
+            fm2_mlp=self.fmkc_fm2_mlp,
+            norm_layer=self.fmkc_norm,
+            branch_dropout=self.fmkc_branch_dropout,
             r=None,
         )
 
@@ -513,6 +613,11 @@ class DKT(Module):
             alpha=self.alpha_kcr_fm1,
             fm2_scale=self.kcr_fm2_scale,
             fm_out_scale=self.kcr_fm_out_scale,
+            bias=self.kcr_fmkc_bias,
+            fm2_gate=self.kcr_fm2_gate,
+            fm2_mlp=self.kcr_fm2_mlp,
+            norm_layer=self.kcr_fmkc_norm,
+            branch_dropout=self.kcr_fmkc_branch_dropout,
             r=r,
         )
 

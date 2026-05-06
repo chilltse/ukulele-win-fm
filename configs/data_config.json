@@ -413,7 +413,7 @@
     },
     "xes3g5m": {
         "dpath": "../data/xes3g5m",
-        "num_q": 7618,
+        "num_q": 7651,
         "num_c": 865,
         "input_type": [
             "questions",
@@ -435,6 +435,39 @@
         "test_original_file": "test.csv",
         "test_file": "test_sequences.csv",
         "test_window_file": "test_window_sequences.csv",
+        "test_question_file": "test_question_sequences.csv",
+        "test_question_window_file": "test_question_window_sequences.csv",
+        "train_valid_original_file_quelevel": "train_valid_quelevel.csv",
+        "train_valid_file_quelevel": "train_valid_sequences_quelevel.csv",
+        "test_file_quelevel": "test_sequences_quelevel.csv",
+        "test_window_file_quelevel": "test_window_sequences_quelevel.csv",
+        "test_original_file_quelevel": "test_quelevel.csv"
+    },
+    "xes3g5m_tree": {
+        "dpath": "../data/xes3g5m_tree",
+        "num_q": 7651,
+        "num_c": 865,
+        "input_type": [
+            "questions",
+            "concepts"
+        ],
+        "max_concepts": 6,
+        "min_seq_len": 3,
+        "maxlen": 200,
+        "emb_path": "",
+        "train_valid_original_file": "train_valid.csv",
+        "train_valid_file": "train_valid_sequences.csv",
+        "folds": [
+            0,
+            1,
+            2,
+            3,
+            4
+        ],
+        "test_original_file": "test.csv",
+        "test_file": "test_sequences.csv",
+        "test_window_file": "test_window_sequences.csv",
+        "kc_tree_path": "../data/xes3g5m_tree\\metadata\\kc_knowledge_tree_original.json",
         "test_question_file": "test_question_sequences.csv",
         "test_question_window_file": "test_question_window_sequences.csv",
         "train_valid_original_file_quelevel": "train_valid_quelevel.csv",
@@ -477,8 +510,8 @@
     },
     "yousician": {
         "dpath": "../data/yousician",
-        "num_q": 2353,
-        "num_c": 2353,
+        "num_q": 1900,
+        "num_c": 1900,
         "input_type": [
             "questions",
             "concepts"
@@ -508,14 +541,14 @@
         "test_original_file_quelevel": "test_quelevel.csv"
     },
     "yousician_fmkc": {
-        "dpath": "../data/yousician_fmkc",
-        "num_q": 131,
-        "num_c": 131,
+        "dpath": "G:\\ANU_course\\pykt-ukulele-May-WIN\\pykt-ukelele\\data\\yousician_fmkc",
+        "num_q": 1900,
+        "num_c": 1900,
         "num_c_fmkc": [
-            22,
-            6,
-            21,
-            5
+            188,
+            20,
+            192,
+            20
         ],
         "kc_fmkc": true,
         "input_type": [
@@ -538,6 +571,71 @@
         "test_original_file": "test.csv",
         "test_file": "test_sequences.csv",
         "test_window_file": "test_window_sequences.csv",
+        "test_question_file": "test_question_sequences.csv",
+        "test_question_window_file": "test_question_window_sequences.csv",
+        "train_valid_original_file_quelevel": "train_valid_quelevel.csv",
+        "train_valid_file_quelevel": "train_valid_sequences_quelevel.csv",
+        "test_file_quelevel": "test_sequences_quelevel.csv",
+        "test_window_file_quelevel": "test_window_sequences_quelevel.csv",
+        "test_original_file_quelevel": "test_quelevel.csv"
+    },
+    "dbe_kt22": {
+        "dpath": "../data/dbe_kt22",
+        "num_q": 212,
+        "num_c": 93,
+        "input_type": [
+            "questions",
+            "concepts"
+        ],
+        "max_concepts": 4,
+        "min_seq_len": 3,
+        "maxlen": 200,
+        "emb_path": "",
+        "train_valid_original_file": "train_valid.csv",
+        "train_valid_file": "train_valid_sequences.csv",
+        "folds": [
+            0,
+            1,
+            2,
+            3,
+            4
+        ],
+        "test_original_file": "test.csv",
+        "test_file": "test_sequences.csv",
+        "test_window_file": "test_window_sequences.csv",
+        "test_question_file": "test_question_sequences.csv",
+        "test_question_window_file": "test_question_window_sequences.csv",
+        "train_valid_original_file_quelevel": "train_valid_quelevel.csv",
+        "train_valid_file_quelevel": "train_valid_sequences_quelevel.csv",
+        "test_file_quelevel": "test_sequences_quelevel.csv",
+        "test_window_file_quelevel": "test_window_sequences_quelevel.csv",
+        "test_original_file_quelevel": "test_quelevel.csv"
+    },
+    "dbe_kt22_tree": {
+        "dpath": "../data/dbe_kt22_tree",
+        "num_q": 212,
+        "num_c": 93,
+        "input_type": [
+            "questions",
+            "concepts"
+        ],
+        "max_concepts": 4,
+        "min_seq_len": 3,
+        "maxlen": 200,
+        "emb_path": "",
+        "train_valid_original_file": "train_valid.csv",
+        "train_valid_file": "train_valid_sequences.csv",
+        "folds": [
+            0,
+            1,
+            2,
+            3,
+            4
+        ],
+        "test_original_file": "test.csv",
+        "test_file": "test_sequences.csv",
+        "test_window_file": "test_window_sequences.csv",
+        "kc_tree_path": "../data/dbe_kt22_tree\\2_DBE_KT22_datafiles_100102_csv\\kc_knowledge_tree_original.json",
         "test_question_file": "test_question_sequences.csv",
         "test_question_window_file": "test_question_window_sequences.csv",
         "train_valid_original_file_quelevel": "train_valid_quelevel.csv",

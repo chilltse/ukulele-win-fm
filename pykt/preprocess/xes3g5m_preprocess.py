@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 from .utils import write_txt
 
@@ -41,12 +42,23 @@ def read_data_from_csv(read_file, write_file):
     - keep only valid responses in {0, 1}
     - write pyKT standard 6-line block format to data.txt
     """
-    df = pd.read_csv(read_file, encoding="utf-8", low_memory=False)
+    # Build a unified raw pool before re-splitting:
+    # include both train_valid_sequences_quelevel.csv and test_quelevel.csv if available.
+    read_files = [read_file]
+    norm_path = str(read_file).replace("\\", "/")
+    if norm_path.endswith("/question_level/train_valid_sequences_quelevel.csv"):
+        qlevel_dir = norm_path.rsplit("/", 1)[0]
+        test_path = f"{qlevel_dir}/test_quelevel.csv"
+        if test_path != read_file and os.path.exists(test_path):
+            read_files.append(test_path)
+
+    dfs = [pd.read_csv(fp, encoding="utf-8", low_memory=False) for fp in read_files]
+    df = pd.concat(dfs, ignore_index=True)
 
     required_cols = {"uid", "questions", "concepts", "responses"}
     missing = required_cols - set(df.columns)
     if missing:
-        raise ValueError(f"Missing required columns in {read_file}: {sorted(missing)}")
+        raise ValueError(f"Missing required columns in source files {read_files}: {sorted(missing)}")
 
     has_timestamps = "timestamps" in df.columns
     has_selectmasks = "selectmasks" in df.columns
@@ -132,6 +144,7 @@ def read_data_from_csv(read_file, write_file):
     avg_ins = round(total_interactions / len(uniq_users), 4) if uniq_users else 0.0
     print(
         "after xes3g5m preprocess, "
+        f"source files: {len(read_files)}, "
         f"interaction num: {total_interactions}, "
         f"user num: {len(uniq_users)}, "
         f"question num: {len(uniq_questions)}, "
