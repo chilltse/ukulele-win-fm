@@ -105,6 +105,9 @@ def model_forward(model, data, rel=None):
     cq = torch.cat((q[:,0:1], qshft), dim=1)
     cc = torch.cat((c[:,0:1], cshft), dim=1)
     cr = torch.cat((r[:,0:1], rshft), dim=1)
+    c_dense = dcur["cdense_seqs"].to(device) if "cdense_seqs" in dcur else None
+    cshft_dense = dcur["shft_cdense_seqs"].to(device) if "shft_cdense_seqs" in dcur else None
+    ccd = None if c_dense is None or cshft_dense is None else torch.cat((c_dense[:, 0:1], cshft_dense), dim=1)
     if model_name in ["hawkes"]:
         ct = torch.cat((t[:,0:1], tshft), dim=1)
     elif model_name in ["rkt"]:
@@ -205,14 +208,18 @@ def model_forward(model, data, rel=None):
         if getattr(model, "emb_type", "") == "qid_fmkc":
             # DKT-fmkc returns target-conditioned predictions.
             # Feed full sequence and align y[:,1:] with rshft.
-            y = model(cc.long(), cr.long())[:, 1:]
+            if ccd is None:
+                raise ValueError("qid_fmkc requires concepts_dense in dataset as q_dense.")
+            y = model(cc.long(), cr.long(), ccd.long())[:, 1:]
         else:
-            y = model(c.long(), r.long())
+            y = model(c.long(), r.long(), None)
             y = (y * one_hot(cshft.long(), model.num_c)).sum(-1)
         ys.append(y)
     elif model_name == "dkt+":
         if getattr(model, "emb_type", "") == "qid_fmkc":
-            y = model(cc.long(), cr.long())
+            if ccd is None:
+                raise ValueError("dkt+ qid_fmkc requires concepts_dense in dataset as q_dense.")
+            y = model(cc.long(), cr.long(), ccd.long())
             y_next = y[:, 1:]
             y_curr = y[:, :-1]
             ys = [y_next, y_curr, y]
@@ -229,13 +236,23 @@ def model_forward(model, data, rel=None):
         y = model(cc.long(), cr.long())
         ys.append(y[:,1:])
     elif model_name in ["kqn", "sakt"]:
-        y = model(c.long(), r.long(), cshft.long())
+        if model_name == "sakt" and getattr(model, "emb_type", "") == "qid_fmkc":
+            if cshft_dense is None:
+                raise ValueError("sakt qid_fmkc requires concepts_dense in dataset as qry_dense.")
+            y = model(c.long(), r.long(), cshft.long(), qry_dense=cshft_dense.long())
+        else:
+            y = model(c.long(), r.long(), cshft.long())
         ys.append(y)
     elif model_name in ["saint"]:
         y = model(cq.long(), cc.long(), r.long())
         ys.append(y[:, 1:])
     elif model_name in ["akt","extrakt","folibikt", "robustkt", "akt_vector", "akt_norasch", "akt_mono", "akt_attn", "aktattn_pos", "aktmono_pos", "akt_raschx", "akt_raschy", "aktvec_raschx", "lefokt_akt", "fluckt"]:               
-        y, reg_loss = model(cc.long(), cr.long(), cq.long())
+        if model_name == "akt" and getattr(model, "emb_type", "") == "qid_fmkc":
+            if ccd is None:
+                raise ValueError("akt qid_fmkc requires concepts_dense in dataset as q_dense.")
+            y, reg_loss = model(cc.long(), cr.long(), cq.long(), q_dense=ccd.long())
+        else:
+            y, reg_loss = model(cc.long(), cr.long(), cq.long())
         ys.append(y[:,1:])
         preloss.append(reg_loss)
     elif model_name in ["atkt", "atktfix"]:

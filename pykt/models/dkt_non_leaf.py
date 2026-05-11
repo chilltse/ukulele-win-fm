@@ -3,7 +3,7 @@ import os
 import torch
 from torch.nn import Dropout, Embedding, LSTM, Linear, Module, ModuleList, Parameter, ReLU, Sequential
 
-# v1.0.0 leaf and non-leaf
+# qid_fmkc + qid_tree + non-leaf output aggregation
 
 class DKT(Module):
     def __init__(
@@ -150,7 +150,7 @@ class DKT(Module):
             default_path = os.path.join(
                 dpath,
                 "2_DBE_KT22_datafiles_100102_csv",
-                "kc_knowledge_tree_original.json",
+                "kc_knowledge_tree.json",
             )
             if os.path.exists(default_path):
                 return default_path

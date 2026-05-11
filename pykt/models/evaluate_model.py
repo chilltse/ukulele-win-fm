@@ -66,8 +66,12 @@ def evaluate(model, test_loader, model_name, rel=None, save_path=""):
             else:
                 q, c, r = dcur["qseqs"], dcur["cseqs"], dcur["rseqs"] 
                 qshft, cshft, rshft= dcur["shft_qseqs"], dcur["shft_cseqs"], dcur["shft_rseqs"]
+                c_dense = dcur["cdense_seqs"] if "cdense_seqs" in dcur else None
+                cshft_dense = dcur["shft_cdense_seqs"] if "shft_cdense_seqs" in dcur else None
             m, sm = dcur["masks"], dcur["smasks"]
             q, c, r, qshft, cshft, rshft, m, sm = q.to(device), c.to(device), r.to(device), qshft.to(device), cshft.to(device), rshft.to(device), m.to(device), sm.to(device)
+            if c_dense is not None and cshft_dense is not None:
+                c_dense, cshft_dense = c_dense.to(device), cshft_dense.to(device)
             if model.model_name in que_type_models and model_name not in ["lpkt", "rkt", "promptkt", "unikt"]:
                 model.model.eval()
             else:
@@ -77,6 +81,9 @@ def evaluate(model, test_loader, model_name, rel=None, save_path=""):
             cq = torch.cat((q[:,0:1], qshft), dim=1)
             cc = torch.cat((c[:,0:1], cshft), dim=1)
             cr = torch.cat((r[:,0:1], rshft), dim=1)
+            ccd = None
+            if c_dense is not None and cshft_dense is not None:
+                ccd = torch.cat((c_dense[:,0:1], cshft_dense), dim=1)
             if model_name in ["atdkt"]:
                 '''
                 y = model(dcur) 
@@ -102,9 +109,19 @@ def evaluate(model, test_loader, model_name, rel=None, save_path=""):
                 y = model(dcur)
             elif model_name in ["dkt", "dkt+"]:
                 if model_name in ["dkt", "dkt+"] and getattr(model, "emb_type", "") == "qid_fmkc":
-                    y = model(cc.long(), cr.long())[:, 1:]
+                    if model_name == "dkt":
+                        if ccd is None:
+                            raise ValueError("qid_fmkc requires concepts_dense in dataset as q_dense.")
+                        y = model(cc.long(), cr.long(), ccd.long())[:, 1:]
+                    else:
+                        if ccd is None:
+                            raise ValueError("dkt+ qid_fmkc requires concepts_dense in dataset as q_dense.")
+                        y = model(cc.long(), cr.long(), ccd.long())[:, 1:]
                 else:
-                    y = model(c.long(), r.long())
+                    if model_name == "dkt":
+                        y = model(c.long(), r.long(), None)
+                    else:
+                        y = model(c.long(), r.long())
                     y = (y * one_hot(cshft.long(), model.num_c)).sum(-1)
             elif model_name in ["dkt_forget"]:
                 y = model(c.long(), r.long(), dgaps)
@@ -113,12 +130,22 @@ def evaluate(model, test_loader, model_name, rel=None, save_path=""):
                 y = model(cc.long(), cr.long())
                 y = y[:,1:]
             elif model_name in ["kqn", "sakt"]:
-                y = model(c.long(), r.long(), cshft.long())
+                if model_name == "sakt" and getattr(model, "emb_type", "") == "qid_fmkc":
+                    if cshft_dense is None:
+                        raise ValueError("sakt qid_fmkc requires concepts_dense in dataset as qry_dense.")
+                    y = model(c.long(), r.long(), cshft.long(), qry_dense=cshft_dense.long())
+                else:
+                    y = model(c.long(), r.long(), cshft.long())
             elif model_name == "saint":
                 y = model(cq.long(), cc.long(), r.long())
                 y = y[:, 1:]
             elif model_name in ["akt","extrakt","folibikt", "robustkt", "akt_vector", "akt_norasch", "akt_mono", "akt_attn", "aktattn_pos", "aktmono_pos", "akt_raschx", "akt_raschy", "aktvec_raschx", "lefokt_akt", "fluckt"]:                                
-                y, reg_loss = model(cc.long(), cr.long(), cq.long())
+                if model_name == "akt" and getattr(model, "emb_type", "") == "qid_fmkc":
+                    if ccd is None:
+                        raise ValueError("akt qid_fmkc requires concepts_dense in dataset as q_dense.")
+                    y, reg_loss = model(cc.long(), cr.long(), cq.long(), q_dense=ccd.long())
+                else:
+                    y, reg_loss = model(cc.long(), cr.long(), cq.long())
                 y = y[:,1:]
             elif model_name in ["dtransformer"]:
                 output, *_ = model.predict(cc.long(), cr.long(), cq.long())
@@ -417,8 +444,12 @@ def evaluate_question(model, test_loader, model_name, fusion_type=["early_fusion
             else:    
                 q, c, r = dcurori["qseqs"], dcurori["cseqs"], dcurori["rseqs"]
                 qshft, cshft, rshft = dcurori["shft_qseqs"], dcurori["shft_cseqs"], dcurori["shft_rseqs"]
+                c_dense = dcurori["cdense_seqs"] if "cdense_seqs" in dcurori else None
+                cshft_dense = dcurori["shft_cdense_seqs"] if "shft_cdense_seqs" in dcurori else None
             m, sm = dcurori["masks"], dcurori["smasks"]
             q, c, r, qshft, cshft, rshft, m, sm = q.to(device), c.to(device), r.to(device), qshft.to(device), cshft.to(device), rshft.to(device), m.to(device), sm.to(device)
+            if c_dense is not None and cshft_dense is not None:
+                c_dense, cshft_dense = c_dense.to(device), cshft_dense.to(device)
             qidxs, rests, orirow = dqtest["qidxs"], dqtest["rests"], dqtest["orirow"]
             lenc += q.shape[0]
             # print("="*20)
@@ -429,6 +460,9 @@ def evaluate_question(model, test_loader, model_name, fusion_type=["early_fusion
             cq = torch.cat((q[:,0:1], qshft), dim=1)
             cc = torch.cat((c[:,0:1], cshft), dim=1)
             cr = torch.cat((r[:,0:1], rshft), dim=1)
+            ccd = None
+            if c_dense is not None and cshft_dense is not None:
+                ccd = torch.cat((c_dense[:,0:1], cshft_dense), dim=1)
             dcur = dict()
             if model_name in ["dkvmn","skvmn"]:
                 y, h = model(cc.long(), cr.long(), True)
@@ -449,7 +483,18 @@ def evaluate_question(model, test_loader, model_name, fusion_type=["early_fusion
             elif model_name in ["rekt"]:
                 y, h = model(dcurori, qtest=True, train=False)
             elif model_name in ["akt","extrakt", "folibikt","fluckt","robustkt", "lefokt_akt", "akt_vector", "akt_norasch", "akt_mono", "akt_attn", "aktattn_pos", "aktmono_pos", "akt_raschx", "akt_raschy", "aktvec_raschx"]:
-                y, reg_loss, h = model(cc.long(), cr.long(), cq.long(), True)
+                if model_name == "akt" and getattr(model, "emb_type", "") == "qid_fmkc":
+                    if ccd is None:
+                        raise ValueError("akt qid_fmkc requires concepts_dense in dataset as q_dense.")
+                    y, reg_loss, h = model(
+                        cc.long(),
+                        cr.long(),
+                        cq.long(),
+                        qtest=True,
+                        q_dense=ccd.long(),
+                    )
+                else:
+                    y, reg_loss, h = model(cc.long(), cr.long(), cq.long(), True)
                 y = y[:,1:]
             elif model_name in ["dtransformer"]:
                 output, h, *_ = model.predict(cc.long(), cr.long(), cq.long())
@@ -475,9 +520,19 @@ def evaluate_question(model, test_loader, model_name, fusion_type=["early_fusion
                 y = (y * one_hot(cshft.long(), model.num_c)).sum(-1)
             elif model_name in ["dkt", "dkt+"]:
                 if model_name in ["dkt", "dkt+"] and getattr(model, "emb_type", "") == "qid_fmkc":
-                    y = model(cc.long(), cr.long())[:, 1:]
+                    if model_name == "dkt":
+                        if ccd is None:
+                            raise ValueError("qid_fmkc requires concepts_dense in dataset as q_dense.")
+                        y = model(cc.long(), cr.long(), ccd.long())[:, 1:]
+                    else:
+                        if ccd is None:
+                            raise ValueError("dkt+ qid_fmkc requires concepts_dense in dataset as q_dense.")
+                        y = model(cc.long(), cr.long(), ccd.long())[:, 1:]
                 else:
-                    y = model(c.long(), r.long())
+                    if model_name == "dkt":
+                        y = model(c.long(), r.long(), None)
+                    else:
+                        y = model(c.long(), r.long())
                     y = (y * one_hot(cshft.long(), model.num_c)).sum(-1)
             elif model_name in ["dkt_forget"]:
                 y = model(c.long(), r.long(), dgaps)
@@ -885,13 +940,12 @@ def predict_each_group(dtotal, dcur, dforget, curdforget, is_repeat, qidx, uid, 
             qdout = None if cqd.shape[0] == 0 else cqd.long()[k]
         if model_name in ["dkt", "dkt+"]:
             if model_name in ["dkt", "dkt+"] and getattr(model, "emb_type", "") == "qid_fmkc":
-                curc = cout.view(1, 1).to(device)
-                cin_pred = torch.cat((cin, curc), axis=1)
-                rin_pred = torch.cat((rin, torch.zeros_like(curc)), axis=1)
-                y = model(cin_pred.long(), rin_pred.long())
-                pred = y[0, -1]
+                raise ValueError("split prediction path requires q_dense for dkt/dkt+ qid_fmkc and is not supported here.")
             else:
-                y = model(cin.long(), rin.long())
+                if model_name == "dkt":
+                    y = model(cin.long(), rin.long(), None)
+                else:
+                    y = model(cin.long(), rin.long())
                 pred = y[0][-1][cout.item()]
         if model_name in ["dkt_forget", "datakt"]:
             din = dict()
@@ -913,13 +967,12 @@ def predict_each_group(dtotal, dcur, dforget, curdforget, is_repeat, qidx, uid, 
             pred = y[0][-1][cout.item()]
         elif model_name in ["dkt", "dkt+"]:
             if model_name in ["dkt", "dkt+"] and getattr(model, "emb_type", "") == "qid_fmkc":
-                curc = cout.view(1, 1).to(device)
-                cin_pred = torch.cat((cin, curc), axis=1)
-                rin_pred = torch.cat((rin, torch.zeros_like(curc)), axis=1)
-                y = model(cin_pred.long(), rin_pred.long())
-                pred = y[0, -1]
+                raise ValueError("split prediction path requires q_dense for dkt/dkt+ qid_fmkc and is not supported here.")
             else:
-                y = model(cin.long(), rin.long())
+                if model_name == "dkt":
+                    y = model(cin.long(), rin.long(), None)
+                else:
+                    y = model(cin.long(), rin.long())
                 pred = y[0][-1][cout.item()]
         elif model_name == "dkt_forget":
             # y = model(cin.long(), rin.long(), din, dcur)
@@ -1339,9 +1392,12 @@ def predict_each_group2(dtotal, dcur, dforget, curdforget, is_repeat, qidx, uid,
             y = (y * one_hot(curcshft.long(), model.num_c)).sum(-1)
         elif model_name in ["dkt", "dkt+"]:
             if model_name in ["dkt", "dkt+"] and getattr(model, "emb_type", "") == "qid_fmkc":
-                y = model(ccc.long(), ccr.long())[:, 1:]
+                raise ValueError("split prediction path requires q_dense for dkt/dkt+ qid_fmkc and is not supported here.")
             else:
-                y = model(curc.long(), curr.long())
+                if model_name == "dkt":
+                    y = model(curc.long(), curr.long(), None)
+                else:
+                    y = model(curc.long(), curr.long())
                 y = (y * one_hot(curcshft.long(), model.num_c)).sum(-1)
         elif model_name in ["dkt_forget"]:
             y = model(curc.long(), curr.long(), dgaps)

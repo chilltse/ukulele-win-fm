@@ -41,6 +41,7 @@ from .robustkt import Robustkt
 device = "cpu" if not torch.cuda.is_available() else "cuda"
 
 def init_model(model_name, model_config, data_config, emb_type):
+    tree_num_c = data_config.get("num_c_tree", data_config["num_c"])
     if model_name == "dkt":
         dkt_kw = {
             "emb_type": emb_type,
@@ -50,12 +51,19 @@ def init_model(model_name, model_config, data_config, emb_type):
         }
         if emb_type == "qid_fmkc":
             dkt_kw["num_c_fmkc"] = data_config["num_c_fmkc"]
-        model = DKT(data_config["num_c"], **model_config, **dkt_kw).to(device)
+        dkt_num_c = tree_num_c if emb_type == "qid_tree" else data_config["num_c"]
+        model = DKT(dkt_num_c, **model_config, **dkt_kw).to(device)
     elif model_name == "dkt+":
-        dktplus_kw = {"emb_type": emb_type, "emb_path": data_config["emb_path"]}
+        dktplus_kw = {
+            "emb_type": emb_type,
+            "emb_path": data_config["emb_path"],
+            "dpath": data_config.get("dpath", ""),
+            "kc_tree_path": data_config.get("kc_tree_path", ""),
+        }
         if emb_type == "qid_fmkc":
             dktplus_kw["num_c_fmkc"] = data_config["num_c_fmkc"]
-        model = DKTPlus(data_config["num_c"], **model_config, **dktplus_kw).to(device)
+        dktplus_num_c = tree_num_c if emb_type == "qid_tree" else data_config["num_c"]
+        model = DKTPlus(dktplus_num_c, **model_config, **dktplus_kw).to(device)
     elif model_name == "dkvmn":
         model = DKVMN(data_config["num_c"], **model_config, emb_type=emb_type, emb_path=data_config["emb_path"]).to(device)
     elif model_name == "deep_irt":
@@ -64,7 +72,8 @@ def init_model(model_name, model_config, data_config, emb_type):
         sakt_kw = {"emb_type": emb_type, "emb_path": data_config["emb_path"]}
         if emb_type == "qid_fmkc":
             sakt_kw["num_c_fmkc"] = data_config["num_c_fmkc"]
-        model = SAKT(data_config["num_c"],  **model_config, **sakt_kw).to(device)
+        sakt_num_c = tree_num_c if emb_type == "qid_tree" else data_config["num_c"]
+        model = SAKT(sakt_num_c,  **model_config, **sakt_kw).to(device)
     elif model_name == "saint":
         model = SAINT(data_config["num_q"], data_config["num_c"], **model_config, emb_type=emb_type, emb_path=data_config["emb_path"]).to(device)
     elif model_name == "dkt_forget":
@@ -73,8 +82,9 @@ def init_model(model_name, model_config, data_config, emb_type):
         akt_kw = {"emb_type": emb_type, "emb_path": data_config["emb_path"]}
         if emb_type == "qid_fmkc":
             akt_kw["num_c_fmkc"] = data_config["num_c_fmkc"]
+        akt_num_c = tree_num_c if emb_type == "qid_tree" else data_config["num_c"]
         model = AKT(
-            data_config["num_c"],
+            akt_num_c,
             data_config["num_q"],
             **model_config,
             **akt_kw,
@@ -138,10 +148,16 @@ def init_model(model_name, model_config, data_config, emb_type):
     elif model_name == "datakt":
         model = BAKTTime(data_config["num_c"], data_config["num_q"], data_config["num_rgap"], data_config["num_sgap"], data_config["num_pcount"], **model_config, emb_type=emb_type, emb_path=data_config["emb_path"]).to(device)
     elif model_name == "simplekt":
-        simplekt_kw = {"emb_type": emb_type, "emb_path": data_config["emb_path"]}
+        simplekt_kw = {
+            "emb_type": emb_type,
+            "emb_path": data_config["emb_path"],
+            "dpath": data_config.get("dpath", ""),
+            "kc_tree_path": data_config.get("kc_tree_path", ""),
+        }
         if emb_type == "qid_fmkc":
             simplekt_kw["num_c_fmkc"] = data_config["num_c_fmkc"]
-        model = simpleKT(data_config["num_c"], data_config["num_q"], **model_config, **simplekt_kw).to(device)
+        simplekt_num_c = tree_num_c if emb_type == "qid_tree" else data_config["num_c"]
+        model = simpleKT(simplekt_num_c, data_config["num_q"], **model_config, **simplekt_kw).to(device)
     elif model_name == "rekt":
         model = ReKT(data_config["num_c"], data_config["num_q"], **model_config, emb_type=emb_type).to(device)
     elif model_name == "stablekt":

@@ -130,6 +130,10 @@ class KTDataset(Dataset):
         # seq_qids, seq_cids, seq_rights, seq_mask = [], [], [], []
         df = pd.read_csv(sequence_path)#[0:1000]
         df = df[df["fold"].isin(folds)]
+
+        if self.kc_fmkc and "concepts_dense" in df.columns:
+            dori["cdense_seqs"] = []
+
         interaction_num = 0
         # seq_qidxs, seq_rests = [], []
         dqtest = {"qidxs": [], "rests":[], "orirow":[]}
@@ -168,6 +172,8 @@ class KTDataset(Dataset):
                 if self.kc_fmkc:
                     concept_tokens = row["concepts"].split(",")
                     dori["cseqs"].append([_parse_fmkc_concept(t) for t in concept_tokens])
+                    if "cdense_seqs" in dori:
+                        dori["cdense_seqs"].append([int(_) for _ in row["concepts_dense"].split(",")])
                 else:
                     dori["cseqs"].append([int(_) for _ in row["concepts"].split(",")])
             if "questions" in self.input_type:

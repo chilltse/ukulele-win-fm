@@ -3,7 +3,6 @@ import os
 import torch
 from torch.nn import Dropout, Embedding, LSTM, Linear, Module, ModuleList, Parameter, ReLU, Sequential
 
-# v1.0.0 leaf and non-leaf
 
 class DKT(Module):
     def __init__(
@@ -101,14 +100,6 @@ class DKT(Module):
             self.register_buffer("parent_index", torch.tensor(parent_index, dtype=torch.long))
             topo_index = self._build_topo_order(parent_index)
             self.register_buffer("topo_index", torch.tensor(topo_index, dtype=torch.long))
-
-            # Non-leaf knowledge-state output is derived from leaf descendants.
-            # This avoids directly trusting raw non-leaf output neurons, which may
-            # receive weak or no direct supervision when training mainly uses leaves.
-            leaf_descendant_distance, non_leaf_mask = self._build_leaf_descendant_distance(parent_index)
-            self.register_buffer("leaf_descendant_distance", leaf_descendant_distance)
-            self.register_buffer("non_leaf_mask", non_leaf_mask)
-            self.tree_desc_alpha = Parameter(torch.tensor(0.1))
         elif emb_type.startswith("qid"):
             # Original DKT interaction embedding:
             # each (q, r) pair has an independent embedding.
@@ -149,7 +140,6 @@ class DKT(Module):
         if dpath:
             default_path = os.path.join(
                 dpath,
-                "2_DBE_KT22_datafiles_100102_csv",
                 "kc_knowledge_tree_original.json",
             )
             if os.path.exists(default_path):
@@ -245,74 +235,6 @@ class DKT(Module):
                 cur = base
             node_embs[idx] = cur
         return torch.stack(node_embs, dim=0)
-
-    def _build_leaf_descendant_distance(self, parent_index):
-        """
-        Build leaf-descendant distances for tree-aware non-leaf output.
-
-        leaf_descendant_distance[node, leaf] = distance from node to leaf
-        if leaf is inside node's subtree; otherwise -1.
-
-        Later in forward, non-leaf states are computed by an exponential
-        weighted average over descendant leaf predictions:
-            weight = exp(-alpha * distance)
-        where alpha is learnable.
-        """
-        n = len(parent_index)
-        children = [[] for _ in range(n)]
-        for child, parent in enumerate(parent_index):
-            if 0 <= parent < n:
-                children[parent].append(child)
-
-        non_leaf_mask = torch.tensor(
-            [len(child_list) > 0 for child_list in children],
-            dtype=torch.bool,
-        )
-
-        leaf_descendant_distance = torch.full((n, n), -1.0, dtype=torch.float)
-
-        for start in range(n):
-            stack = [(start, 0)]
-            visited = set()
-
-            while stack:
-                node, dist = stack.pop()
-                if node in visited:
-                    raise ValueError("Cycle detected while building leaf descendant distance.")
-                visited.add(node)
-
-                if len(children[node]) == 0:
-                    leaf_descendant_distance[start, node] = float(dist)
-                else:
-                    for child in children[node]:
-                        stack.append((child, dist + 1))
-
-        # Safety fallback: every node should at least point to itself if no leaf was found.
-        for node in range(n):
-            if (leaf_descendant_distance[node] >= 0).sum() == 0:
-                leaf_descendant_distance[node, node] = 0.0
-
-        return leaf_descendant_distance, non_leaf_mask
-
-    def _aggregate_tree_output(self, y_raw):
-        """
-        Make non-leaf knowledge states depend on descendant leaf predictions.
-
-        Leaf nodes keep their own raw prediction.
-        Non-leaf nodes use an exponential distance-weighted average of their
-        descendant leaf predictions.
-        """
-        valid = (self.leaf_descendant_distance >= 0).float()
-        distance = self.leaf_descendant_distance.clamp(min=0.0)
-
-        alpha = torch.nn.functional.softplus(self.tree_desc_alpha)
-        weights = torch.exp(-alpha * distance) * valid
-        weights = weights / weights.sum(dim=1, keepdim=True).clamp(min=1e-8)
-
-        y_agg = torch.matmul(y_raw, weights.t())
-        non_leaf_mask = self.non_leaf_mask.view(1, 1, -1)
-
-        return torch.where(non_leaf_mask, y_agg, y_raw)
 
     # ------------------------------------------------------------------
     # Utilities for FMKC
@@ -643,9 +565,8 @@ class DKT(Module):
             h, _ = self.lstm_layer(xemb)
             h = self.dropout_layer(h)
 
-            y_raw = self.out_layer(h)
-            y_raw = torch.sigmoid(y_raw)
-            y = self._aggregate_tree_output(y_raw)
+            y = self.out_layer(h)
+            y = torch.sigmoid(y)
             return y
         elif self.emb_type == "qid":
             # Original DKT mode.

@@ -1,5 +1,6 @@
 import os, sys
 import argparse
+import glob
 from pykt.preprocess.split_datasets import main as split_concept
 from pykt.preprocess.split_datasets_que import main as split_question
 from pykt.preprocess import data_proprocess, process_raw_data
@@ -16,6 +17,7 @@ dname2paths = {
     "bridge2algebra2006": "../data/bridge2algebra2006/bridge_to_algebra_2006_2007_train.txt",
     "statics2011": "../data/statics2011/AllData_student_step_2011F.csv",
     "nips_task34": "../data/nips_task34/train_task_3_4.csv",
+    "nips_task34_tree": "../data/nips_task34_tree/train_task_3_4.csv",
     "poj": "../data/poj/poj_log.csv",
     "slepemapy": "../data/slepemapy/answer.csv",
     "assist2017": "../data/assist2017/anonymized_full_release_competition_dataset.csv",
@@ -48,8 +50,12 @@ if __name__ == "__main__":
     print("-"*50)
     print(f"dname: {dname}, writef: {writef}")
     # split
-    # os.system("rm " + dname + "/*.pkl")
-    os.system("rm -f " + dname + "/*.pkl")
+    # remove stale cached processed files across platforms
+    for pkl_path in glob.glob(os.path.join(dname, "*.pkl")):
+        try:
+            os.remove(pkl_path)
+        except OSError:
+            pass
 
     #for concept level model
     split_concept(dname, writef, args.dataset_name, configf, args.min_seq_len,args.maxlen, args.kfold)
