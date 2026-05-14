@@ -450,9 +450,9 @@
         "test_original_file_quelevel": "test_quelevel.csv"
     },
     "xes3g5m_tree": {
-        "dpath": "../data/xes3g5m_tree",
+        "dpath": "../data/xes3g5m_tree/question_level",
         "num_q": 7651,
-        "num_c": 865,
+        "num_c": 927,
         "input_type": [
             "questions",
             "concepts"
@@ -473,7 +473,7 @@
         "test_original_file": "test.csv",
         "test_file": "test_sequences.csv",
         "test_window_file": "test_window_sequences.csv",
-        "kc_tree_path": "../data/xes3g5m_tree\\metadata\\kc_knowledge_tree_original.json",
+        "kc_tree_path": "../data/xes3g5m_tree/question_level\\kc_knowledge_tree.json",
         "test_question_file": "test_question_sequences.csv",
         "test_question_window_file": "test_question_window_sequences.csv",
         "train_valid_original_file_quelevel": "train_valid_quelevel.csv",
@@ -516,8 +516,8 @@
     },
     "yousician": {
         "dpath": "../data/yousician",
-        "num_q": 460,
-        "num_c": 460,
+        "num_q": 131,
+        "num_c": 131,
         "input_type": [
             "questions",
             "concepts"
@@ -548,13 +548,13 @@
     },
     "yousician_fmkc": {
         "dpath": "../data/yousician_fmkc",
-        "num_q": 460,
-        "num_c": 460,
+        "num_q": 131,
+        "num_c": 131,
         "num_c_fmkc": [
-            49,
-            11,
-            51,
-            11
+            22,
+            6,
+            21,
+            5
         ],
         "kc_fmkc": true,
         "input_type": [

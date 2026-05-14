@@ -5,3 +5,7 @@ union_level,union_file,model_name_requested,train_script,dataset_name,dataset_va
 4,yousician_ukulele_union_level_4.json,dkt_plus,wandb_dkt_plus_train.py,yousician_fmkc,fmkc,ok,,,0,dkt+,qid_fmkc,-1,-1,-1,-1,0.8059974925934774,0.8361209004949256,23
 3,yousician_ukulele_union_level_3.json,dkt_plus,wandb_dkt_plus_train.py,yousician,baseline_qid,ok,,,0,dkt+,qid,-1,-1,-1,-1,0.8155477497953596,0.8465120598614907,24
 3,yousician_ukulele_union_level_3.json,dkt_plus,wandb_dkt_plus_train.py,yousician_fmkc,fmkc,ok,,,0,dkt+,qid_fmkc,-1,-1,-1,-1,0.8198129182203124,0.8475203651126383,30
+2,yousician_ukulele_union_level_2.json,dkt_plus,wandb_dkt_plus_train.py,yousician,baseline_qid,ok,,,0,dkt+,qid,-1,-1,-1,-1,0.806243653732456,0.8312753783684016,29
+2,yousician_ukulele_union_level_2.json,dkt_plus,wandb_dkt_plus_train.py,yousician_fmkc,fmkc,ok,,,0,dkt+,qid_fmkc,-1,-1,-1,-1,0.8096783831599206,0.8306662975267627,26
+1,yousician_ukulele_union_level_1.json,dkt_plus,wandb_dkt_plus_train.py,yousician,baseline_qid,ok,,,0,dkt+,qid,-1,-1,-1,-1,0.7977047431903248,0.8675393863422695,37
+1,yousician_ukulele_union_level_1.json,dkt_plus,wandb_dkt_plus_train.py,yousician_fmkc,fmkc,ok,,,0,dkt+,qid_fmkc,-1,-1,-1,-1,0.7999037450806715,0.8681661491125608,41
