@@ -3,7 +3,7 @@ import os
 import torch
 from torch.nn import Dropout, Embedding, LSTM, Linear, Module, ModuleList, Parameter, ReLU, Sequential
 
-
+# # qid_fmkc + qid_tree；
 class DKT(Module):
     def __init__(
         self,

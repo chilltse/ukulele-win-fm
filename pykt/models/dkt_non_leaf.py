@@ -150,7 +150,7 @@ class DKT(Module):
             default_path = os.path.join(
                 dpath,
                 "2_DBE_KT22_datafiles_100102_csv",
-                "kc_knowledge_tree.json",
+                "kc_knowledge_tree_original.json",
             )
             if os.path.exists(default_path):
                 return default_path

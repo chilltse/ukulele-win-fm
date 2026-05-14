@@ -33,6 +33,7 @@ if __name__ == "__main__":
     parser.add_argument("--tree_pred_depths", type=str, default="")
     parser.add_argument("--tree_aux_ignore_first", type=int, default=1)
     parser.add_argument("--tree_max_ancestor_depth", type=int, default=16)
+    parser.add_argument("--tree_label_level_up", type=int, default=0)
    
     args = parser.parse_args()
 

@@ -44,12 +44,30 @@ def save_cur_predict_result(dres, q, r, d, t, m, sm, p):
         results.append(str([qs, rs, ds, ts, ps, prelabels, auc, acc]))
     return "\n".join(results)
 
+
+def _safe_auc_acc(y_true, y_score):
+    """Return (auc, acc), with auc=-1 when only one class exists."""
+    if len(y_true) == 0:
+        return -1, -1
+    prelabels = [1 if p >= 0.5 else 0 for p in y_score]
+    acc = metrics.accuracy_score(y_true, prelabels)
+    try:
+        auc = metrics.roc_auc_score(y_true=y_true, y_score=y_score)
+    except Exception:
+        auc = -1
+    return auc, acc
+
 def evaluate(model, test_loader, model_name, rel=None, save_path=""):
     if save_path != "":
         fout = open(save_path, "w", encoding="utf8")
     with torch.no_grad():
         y_trues = []
         y_scores = []
+        # For dkt + qid_tree only: depth-wise ancestor metrics.
+        anc_y_trues = {}
+        anc_y_scores = {}
+        hier_child_scores = []
+        hier_parent_scores = []
         dres = dict()
         test_mini_index = 0
         for data in test_loader:
@@ -114,12 +132,56 @@ def evaluate(model, test_loader, model_name, rel=None, save_path=""):
                             raise ValueError("qid_fmkc requires concepts_dense in dataset as q_dense.")
                         y = model(cc.long(), cr.long(), ccd.long())[:, 1:]
                     else:
-                        if ccd is None:
-                            raise ValueError("dkt+ qid_fmkc requires concepts_dense in dataset as q_dense.")
-                        y = model(cc.long(), cr.long(), ccd.long())[:, 1:]
+                        if cshft_dense is None:
+                            raise ValueError("dkt+ qid_fmkc requires concepts_dense in dataset.")
+                        y_full = model(c.long(), r.long())
+                        y = (y_full * one_hot(cshft_dense.long(), model.num_c)).sum(-1)
                 else:
                     if model_name == "dkt":
                         y = model(c.long(), r.long(), None)
+                        if getattr(model, "emb_type", "") == "qid_tree":
+                            pred_all = y[:, :-1, :].clamp(1e-7, 1.0 - 1e-7)
+                            target_q = c[:, 1:].long()
+                            target_r_raw = r[:, 1:].float()
+                            target_r = target_r_raw.clamp(0.0, 1.0)
+                            prev_q = c[:, :-1]
+                            prev_r = r[:, :-1]
+                            prev_valid = (prev_q >= 0) & (prev_q < model.num_c) & (prev_r >= 0) & (prev_r <= 1)
+                            target_valid = (target_q >= 0) & (target_q < model.num_c) & (target_r_raw >= 0) & (target_r_raw <= 1)
+                            sm_aligned = sm[:, :pred_all.size(1)]
+                            valid = prev_valid & target_valid & sm_aligned
+                            safe_target_q = target_q.clamp(0, model.num_c - 1)
+
+                            anc_idx = model.ancestor_index[safe_target_q]
+                            anc_depth = model.ancestor_depth[safe_target_q]
+                            anc_valid = (anc_idx >= 0) & valid.unsqueeze(-1)
+                            safe_anc_idx = anc_idx.clamp(min=0, max=model.num_c - 1)
+
+                            anc_pred = pred_all.unsqueeze(2).expand(-1, -1, safe_anc_idx.size(-1), -1).gather(
+                                dim=3,
+                                index=safe_anc_idx.unsqueeze(-1),
+                            ).squeeze(-1)
+                            anc_true = target_r.unsqueeze(-1).expand_as(anc_pred)
+
+                            # Depth-wise ancestor AUC/ACC pools.
+                            for depth in range(1, int(model.tree_aux_max_depth) + 1):
+                                depth_mask = anc_valid & (anc_depth == float(depth))
+                                if bool(depth_mask.any().item()):
+                                    cur_true = anc_true[depth_mask].detach().cpu().numpy()
+                                    cur_score = anc_pred[depth_mask].detach().cpu().numpy()
+                                    anc_y_trues.setdefault(depth, []).append(cur_true)
+                                    anc_y_scores.setdefault(depth, []).append(cur_score)
+
+                            # Hierarchy consistency on direct parent only (depth=1): p(parent) >= p(child).
+                            parent_mask = anc_valid & (anc_depth == 1.0)
+                            if bool(parent_mask.any().item()):
+                                child_pred = pred_all.gather(
+                                    dim=2,
+                                    index=safe_target_q.unsqueeze(-1),
+                                ).squeeze(-1)
+                                child_pred_expanded = child_pred.unsqueeze(-1).expand_as(anc_pred)
+                                hier_child_scores.append(child_pred_expanded[parent_mask].detach().cpu().numpy())
+                                hier_parent_scores.append(anc_pred[parent_mask].detach().cpu().numpy())
                     else:
                         y = model(c.long(), r.long())
                     y = (y * one_hot(cshft.long(), model.num_c)).sum(-1)
@@ -127,7 +189,10 @@ def evaluate(model, test_loader, model_name, rel=None, save_path=""):
                 y = model(c.long(), r.long(), dgaps)
                 y = (y * one_hot(cshft.long(), model.num_c)).sum(-1)
             elif model_name in ["dkvmn","deep_irt", "skvmn","deep_irt"]:
-                y = model(cc.long(), cr.long())
+                if model_name == "dkvmn" and getattr(model, "use_question_input", False):
+                    y = model(cq.long(), cr.long())
+                else:
+                    y = model(cc.long(), cr.long())
                 y = y[:,1:]
             elif model_name in ["kqn", "sakt"]:
                 if model_name == "sakt" and getattr(model, "emb_type", "") == "qid_fmkc":
@@ -198,6 +263,37 @@ def evaluate(model, test_loader, model_name, rel=None, save_path=""):
 
         prelabels = [1 if p >= 0.5 else 0 for p in ps]
         acc = metrics.accuracy_score(ts, prelabels)
+
+        if model_name == "dkt" and getattr(model, "emb_type", "") == "qid_tree":
+            depth_rows = []
+            for depth in sorted(anc_y_trues.keys()):
+                d_true = np.concatenate(anc_y_trues[depth], axis=0) if len(anc_y_trues[depth]) > 0 else np.array([])
+                d_score = np.concatenate(anc_y_scores[depth], axis=0) if len(anc_y_scores[depth]) > 0 else np.array([])
+                d_auc, d_acc = _safe_auc_acc(d_true, d_score)
+                depth_rows.append((depth, len(d_true), d_auc, d_acc))
+
+            if len(depth_rows) > 0:
+                macro_auc_vals = [row[2] for row in depth_rows if row[2] >= 0]
+                macro_auc = float(np.mean(macro_auc_vals)) if len(macro_auc_vals) > 0 else -1
+                print("qid_tree ancestor metrics:")
+                for depth, cnt, d_auc, d_acc in depth_rows:
+                    print(
+                        f"  depth={depth}: count={cnt}, auc={d_auc:.4f}, acc@0.5={d_acc:.4f}"
+                    )
+                print(f"  macro_auc_over_depths={macro_auc:.4f}")
+            else:
+                print("qid_tree ancestor metrics: no valid ancestor samples on this split.")
+
+            if len(hier_parent_scores) > 0:
+                parent_scores = np.concatenate(hier_parent_scores, axis=0)
+                child_scores = np.concatenate(hier_child_scores, axis=0)
+                consistency = float((parent_scores >= child_scores).mean())
+                print(
+                    "qid_tree hierarchy consistency (depth=1, parent>=child): "
+                    f"{consistency:.4f}"
+                )
+            else:
+                print("qid_tree hierarchy consistency: no valid depth=1 samples.")
     # if save_path != "":
     #     pd.to_pickle(dres, save_path+".pkl")
     return auc, acc
@@ -525,9 +621,10 @@ def evaluate_question(model, test_loader, model_name, fusion_type=["early_fusion
                             raise ValueError("qid_fmkc requires concepts_dense in dataset as q_dense.")
                         y = model(cc.long(), cr.long(), ccd.long())[:, 1:]
                     else:
-                        if ccd is None:
-                            raise ValueError("dkt+ qid_fmkc requires concepts_dense in dataset as q_dense.")
-                        y = model(cc.long(), cr.long(), ccd.long())[:, 1:]
+                        if cshft_dense is None:
+                            raise ValueError("dkt+ qid_fmkc requires concepts_dense in dataset.")
+                        y_full = model(c.long(), r.long())
+                        y = (y_full * one_hot(cshft_dense.long(), model.num_c)).sum(-1)
                 else:
                     if model_name == "dkt":
                         y = model(c.long(), r.long(), None)
@@ -940,7 +1037,13 @@ def predict_each_group(dtotal, dcur, dforget, curdforget, is_repeat, qidx, uid, 
             qdout = None if cqd.shape[0] == 0 else cqd.long()[k]
         if model_name in ["dkt", "dkt+"]:
             if model_name in ["dkt", "dkt+"] and getattr(model, "emb_type", "") == "qid_fmkc":
-                raise ValueError("split prediction path requires q_dense for dkt/dkt+ qid_fmkc and is not supported here.")
+                if model_name == "dkt":
+                    raise ValueError("split prediction path requires q_dense for dkt qid_fmkc and is not supported here.")
+                curc = cout.view(1, 1).to(device)
+                cin_pred = torch.cat((cin, curc), axis=1)
+                rin_pred = torch.cat((rin, torch.zeros_like(curc)), axis=1)
+                y = model(cin_pred.long(), rin_pred.long())
+                pred = y[0, -1]
             else:
                 if model_name == "dkt":
                     y = model(cin.long(), rin.long(), None)
@@ -967,7 +1070,13 @@ def predict_each_group(dtotal, dcur, dforget, curdforget, is_repeat, qidx, uid, 
             pred = y[0][-1][cout.item()]
         elif model_name in ["dkt", "dkt+"]:
             if model_name in ["dkt", "dkt+"] and getattr(model, "emb_type", "") == "qid_fmkc":
-                raise ValueError("split prediction path requires q_dense for dkt/dkt+ qid_fmkc and is not supported here.")
+                if model_name == "dkt":
+                    raise ValueError("split prediction path requires q_dense for dkt qid_fmkc and is not supported here.")
+                curc = cout.view(1, 1).to(device)
+                cin_pred = torch.cat((cin, curc), axis=1)
+                rin_pred = torch.cat((rin, torch.zeros_like(curc)), axis=1)
+                y = model(cin_pred.long(), rin_pred.long())
+                pred = y[0, -1]
             else:
                 if model_name == "dkt":
                     y = model(cin.long(), rin.long(), None)
@@ -1018,7 +1127,10 @@ def predict_each_group(dtotal, dcur, dforget, curdforget, is_repeat, qidx, uid, 
             cin, rin = torch.cat((cin, curc), axis=1), torch.cat((rin, curr), axis=1)
             # print(f"cin: {cin.shape}, curc: {curc.shape}")
             # 应该用预测的r更新memory value，但是这里一个知识点一个知识点预测，所以curr不起作用！
-            y = model(cin.long(), rin.long())
+            if model_name == "dkvmn" and getattr(model, "use_question_input", False):
+                y = model(qin.long(), rin.long())
+            else:
+                y = model(cin.long(), rin.long())
             pred = y[0][-1]
         elif model_name in ["akt","extrakt","folibikt","fluckt", "robustkt","lefokt_akt", "akt_vector", "akt_norasch", "akt_mono", "akt_attn", "aktattn_pos", "aktmono_pos", "akt_raschx", "akt_raschy", "aktvec_raschx"]:  
             #### 输入有question！     
@@ -1392,7 +1504,9 @@ def predict_each_group2(dtotal, dcur, dforget, curdforget, is_repeat, qidx, uid,
             y = (y * one_hot(curcshft.long(), model.num_c)).sum(-1)
         elif model_name in ["dkt", "dkt+"]:
             if model_name in ["dkt", "dkt+"] and getattr(model, "emb_type", "") == "qid_fmkc":
-                raise ValueError("split prediction path requires q_dense for dkt/dkt+ qid_fmkc and is not supported here.")
+                if model_name == "dkt":
+                    raise ValueError("split prediction path requires q_dense for dkt qid_fmkc and is not supported here.")
+                y = model(ccc.long(), ccr.long())[:, 1:]
             else:
                 if model_name == "dkt":
                     y = model(curc.long(), curr.long(), None)
@@ -1404,7 +1518,10 @@ def predict_each_group2(dtotal, dcur, dforget, curdforget, is_repeat, qidx, uid,
             # y = model(curc.long(), curr.long(), curd, curdshft)
             y = (y * one_hot(curcshft.long(), model.num_c)).sum(-1)
         elif model_name in ["dkvmn","deep_irt", "skvmn"]:
-            y = model(ccc.long(), ccr.long())
+            if model_name == "dkvmn" and getattr(model, "use_question_input", False):
+                y = model(ccq.long(), ccr.long())
+            else:
+                y = model(ccc.long(), ccr.long())
             y = y[:,1:]
         elif model_name in ["kqn", "sakt"]:
             y = model(curc.long(), curr.long(), curcshft.long())

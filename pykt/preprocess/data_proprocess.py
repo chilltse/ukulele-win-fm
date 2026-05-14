@@ -1,91 +1,4 @@
 import os
-
-
-def process_raw_data(dataset_name, dname2paths):
-    readf = dname2paths[dataset_name]
-    dname = "/".join(readf.split("/")[0:-1])
-    writef = os.path.join(dname, "data.txt")
-
-    if dataset_name in ["xes3g5m", "xes3g5m_tree"]:
-        root_dir = "/".join(readf.split("/")[:-2])
-        dname = root_dir
-        writef = os.path.join(dname, "data.txt")
-
-    if dataset_name in ["dbe_kt22", "dbe_kt22_tree"]:
-        root_dir = "/".join(readf.split("/")[:-2])
-        dname = root_dir
-        writef = os.path.join(dname, "data.txt")
-        os.makedirs(dname, exist_ok=True)
-
-    print(f"Start preprocessing data: {dataset_name}")
-
-    if dataset_name == "yousician":
-        from .yousician_preprocess import read_data_from_json
-    if dataset_name == "yousician_fmkc":
-        from .yousician_preprocess_kc_fmkc import read_data_from_json as read_data_from_json_fmkc
-    if dataset_name in ["dbe_kt22", "dbe_kt22_tree"]:
-        from .dbe_kt22_preprocess import read_data_from_json as read_data_from_json_dbe_kt22
-
-    if dataset_name == "assist2009":
-        from .assist2009_preprocess import read_data_from_csv
-    elif dataset_name == "assist2012":
-        from .assist2012_preprocess import read_data_from_csv
-    elif dataset_name == "assist2015":
-        from .assist2015_preprocess import read_data_from_csv
-    elif dataset_name == "algebra2005":
-        from .algebra2005_preprocess import read_data_from_csv
-    elif dataset_name == "bridge2algebra2006":
-        from .bridge2algebra2006_preprocess import read_data_from_csv
-    elif dataset_name == "statics2011":
-        from .statics2011_preprocess import read_data_from_csv
-    elif dataset_name in ["nips_task34", "nips_task34_tree"]:
-        from .nips_task34_preprocess import read_data_from_csv
-    elif dataset_name == "poj":
-        from .poj_preprocess import read_data_from_csv
-    elif dataset_name == "slepemapy":
-        from .slepemapy_preprocess import read_data_from_csv
-    elif dataset_name in ["assist2017", "assist2017_tree"]:
-        from .assist2017_preprocess import read_data_from_csv
-    elif dataset_name in ["xes3g5m", "xes3g5m_tree"]:
-        from .xes3g5m_preprocess import read_data_from_csv
-    elif dataset_name == "junyi2015":
-        from .junyi2015_preprocess import read_data_from_csv, load_q2c
-    elif dataset_name in ["ednet", "ednet5w"]:
-        from .ednet_preprocess import read_data_from_csv
-    elif dataset_name == "peiyou":
-        from .aaai2022_competition import read_data_from_csv, load_q2c
-
-    if dataset_name == "junyi2015":
-        dq2c = load_q2c(readf.replace("junyi_ProblemLog_original.csv", "junyi_Exercise_table.csv"))
-        read_data_from_csv(readf, writef, dq2c)
-    elif dataset_name == "peiyou":
-        fname = readf.split("/")[-1]
-        dq2c = load_q2c(readf.replace(fname, "questions.json"))
-        read_data_from_csv(readf, writef, dq2c)
-    elif dataset_name in ["ednet5w", "ednet"]:
-        dname, writef = read_data_from_csv(readf, writef, dataset_name=dataset_name)
-    elif dataset_name == "yousician":
-        read_data_from_json(readf, writef)
-    elif dataset_name == "yousician_fmkc":
-        root = os.path.dirname(os.path.abspath(readf))
-        data_root = os.path.dirname(root)
-        dname = os.path.join(data_root, "yousician_fmkc")
-        os.makedirs(dname, exist_ok=True)
-        writef = os.path.join(dname, "data.txt")
-        read_data_from_json_fmkc(readf, writef)
-    elif dataset_name in ["dbe_kt22", "dbe_kt22_tree"]:
-        read_data_from_json_dbe_kt22(readf, writef)
-    elif dataset_name == "assist2017_tree":
-        kc_tree_path = os.path.join(dname, "kc_knowledge_tree.json")
-        read_data_from_csv(readf, writef, kc_tree_path=kc_tree_path)
-    elif dataset_name not in ["nips_task34", "nips_task34_tree"]:
-        read_data_from_csv(readf, writef)
-    else:
-        metap = os.path.join(dname, "metadata")
-        read_data_from_csv(readf, metap, "task_3_4", writef)
-
-    return dname, writef
-
 import sys
 import pandas as pd
 import numpy as np
@@ -617,7 +530,233 @@ def save_id2idx(dkeyid2idx, save_path):
         fout.write(json.dumps(dkeyid2idx, ensure_ascii=False, indent=4))
 
 
-from .split_datasets import resolve_kc_tree_path, build_tree_artifacts
+def _find_existing_path(paths):
+    for path in paths:
+        if path and os.path.exists(path):
+            return path
+    return ""
+
+
+def resolve_kc_tree_path(dname, dataset_name, explicit_path=None):
+    """Resolve the slim tree JSON path for *_tree datasets.
+
+    The preferred file is kc_knowledge_tree_slim.json, but several fallback
+    locations are supported to avoid breaking existing dataset layouts.
+    """
+    if explicit_path:
+        return explicit_path if os.path.exists(explicit_path) else ""
+
+    candidates = []
+    if dataset_name in ["dbe_kt22_tree", "dbe_kt22"]:
+        candidates.extend([
+            os.path.join(dname, "2_DBE_KT22_datafiles_100102_csv", "kc_knowledge_tree_slim.json"),
+            os.path.join(dname, "2_DBE_KT22_datafiles_100102_csv", "kc_knowledge_tree_original.json"),
+        ])
+    if dataset_name == "xes3g5m_tree":
+        candidates.extend([
+            os.path.join(dname, "metadata", "kc_knowledge_tree_slim.json"),
+            os.path.join(dname, "metadata", "kc_knowledge_tree_original.json"),
+        ])
+
+    candidates.extend([
+        os.path.join(dname, "kc_knowledge_tree_slim.json"),
+        os.path.join(dname, "kc_knowledge_tree_original.json"),
+    ])
+    return _find_existing_path(candidates)
+
+
+def load_tree_root(kc_tree_path):
+    """Load either a pure-node slim JSON or a metadata-wrapped tree JSON."""
+    with open(kc_tree_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    if isinstance(data, dict) and "tree" in data and isinstance(data["tree"], dict):
+        root = data["tree"]
+        wrapped = data
+    elif isinstance(data, dict) and "children" in data:
+        root = data
+        wrapped = None
+    else:
+        raise ValueError(
+            f"Unsupported KC tree JSON format: {kc_tree_path}. "
+            "Expected either a pure root node or a dict containing `tree`."
+        )
+    return root, wrapped
+
+
+def iter_tree_nodes(root):
+    stack = [(root, None)]
+    while stack:
+        node, parent = stack.pop()
+        yield node, parent
+        for child in reversed(node.get("children", []) or []):
+            stack.append((child, node))
+
+
+def build_tree_artifacts(kc_tree_path, pad_val=-1):
+    """Build tree artifacts from kc_knowledge_tree_slim.json.
+
+    Supported input JSON formats:
+      1) pure node tree: {node_id, type, name, parent_id, children}
+      2) pure node tree with explicit tree_idx fields
+      3) wrapper: {tree, parent_index, node_index, keyid2idx_tree, ...}
+
+    If tree_idx is missing, compact tree indices are generated automatically
+    from the traversal order. Therefore the JSON can stay as a clean node-only
+    tree file.
+
+    Returns:
+      keyid2idx_tree: full node_id -> tree_idx and leaf kc_id -> tree_idx
+      parent_index: parent_index[child_tree_idx] = parent_tree_idx or -1
+      node_index: node metadata indexed by tree_idx
+      tree_report: validation and coverage information
+    """
+    root, wrapped = load_tree_root(kc_tree_path)
+
+    nodes = []
+    for node, parent in iter_tree_nodes(root):
+        if "node_id" not in node:
+            raise ValueError(f"Tree node missing node_id: {node}")
+        nodes.append((node, parent))
+
+    if not nodes:
+        raise ValueError(f"Tree JSON contains no nodes: {kc_tree_path}")
+
+    has_tree_idx = ["tree_idx" in node for node, _ in nodes]
+    if any(has_tree_idx) and not all(has_tree_idx):
+        bad = [node.get("name") for node, _ in nodes if "tree_idx" not in node][:20]
+        raise ValueError(
+            "Invalid tree JSON: either every node must have tree_idx, or no node should have tree_idx. "
+            f"Missing tree_idx examples: {bad}"
+        )
+
+    # If the slim JSON only contains node information, generate compact tree_idx
+    # deterministically according to the traversal order. This keeps the JSON clean
+    # while still producing contiguous embedding indices for qid_tree.
+    generated_tree_idx = not all(has_tree_idx)
+    if generated_tree_idx:
+        tree_idx_by_obj_id = {id(node): i for i, (node, _) in enumerate(nodes)}
+        get_tree_idx = lambda node: tree_idx_by_obj_id[id(node)]
+    else:
+        get_tree_idx = lambda node: int(node["tree_idx"])
+
+    node_id_to_tree_idx = {}
+    tree_idx_to_node = {}
+    duplicate_node_ids = []
+    duplicate_tree_indices = []
+
+    for node, _ in nodes:
+        node_id = int(node["node_id"])
+        tree_idx = int(get_tree_idx(node))
+        if str(node_id) in node_id_to_tree_idx:
+            duplicate_node_ids.append(node_id)
+        if tree_idx in tree_idx_to_node:
+            duplicate_tree_indices.append(tree_idx)
+        node_id_to_tree_idx[str(node_id)] = tree_idx
+        tree_idx_to_node[tree_idx] = node
+
+    if duplicate_node_ids or duplicate_tree_indices:
+        raise ValueError(
+            f"Invalid tree JSON: duplicate_node_ids={duplicate_node_ids}, "
+            f"duplicate_tree_indices={duplicate_tree_indices}"
+        )
+
+    num_c_tree = max(tree_idx_to_node.keys()) + 1 if tree_idx_to_node else 0
+    missing_tree_indices = [i for i in range(num_c_tree) if i not in tree_idx_to_node]
+    if missing_tree_indices:
+        raise ValueError(
+            "tree_idx must be contiguous from 0 to num_c-1. "
+            f"Missing: {missing_tree_indices[:20]}"
+        )
+
+    parent_index = [-1] * num_c_tree
+    node_index = [None] * num_c_tree
+    original_kc_id_to_tree_idx = {}
+    internal_node_id_to_tree_idx = {}
+    duplicate_kc_ids = []
+    missing_parent_ids = []
+
+    for node, _ in nodes:
+        node_id = int(node["node_id"])
+        tree_idx = int(get_tree_idx(node))
+        parent_id = node.get("parent_id", None)
+        node_type = node.get("type", "")
+        name = node.get("name", "")
+
+        if parent_id is not None:
+            parent_raw = str(int(parent_id))
+            if parent_raw not in node_id_to_tree_idx:
+                missing_parent_ids.append({"node_id": node_id, "parent_id": int(parent_id), "name": name})
+            else:
+                parent_index[tree_idx] = int(node_id_to_tree_idx[parent_raw])
+
+        meta = {
+            "tree_idx": tree_idx,
+            "node_id": node_id,
+            "type": node_type,
+            "name": name,
+            "parent_id": None if parent_id is None else int(parent_id),
+            "kc_id": None,
+            "is_observed_kc": node_type == "kc_leaf" or node.get("kc_id") is not None,
+        }
+
+        if node.get("kc_id", None) is not None:
+            kc_id = int(node["kc_id"])
+            meta["kc_id"] = kc_id
+            if str(kc_id) in original_kc_id_to_tree_idx:
+                duplicate_kc_ids.append(kc_id)
+            original_kc_id_to_tree_idx[str(kc_id)] = tree_idx
+        else:
+            internal_node_id_to_tree_idx[str(node_id)] = tree_idx
+
+        node_index[tree_idx] = meta
+
+    if duplicate_kc_ids:
+        raise ValueError(f"Invalid tree JSON: duplicate kc_id values: {duplicate_kc_ids[:20]}")
+    if missing_parent_ids:
+        raise ValueError(f"Invalid tree JSON: missing parent IDs: {missing_parent_ids[:20]}")
+
+    # Cycle check over compact tree indices.
+    state = [0] * num_c_tree
+    cycle_nodes = []
+
+    def dfs(u):
+        if state[u] == 2:
+            return
+        if state[u] == 1:
+            cycle_nodes.append(u)
+            return
+        state[u] = 1
+        p = parent_index[u]
+        if 0 <= p < num_c_tree:
+            dfs(p)
+        state[u] = 2
+
+    for i in range(num_c_tree):
+        dfs(i)
+    if cycle_nodes:
+        raise ValueError(f"Cycle detected in tree parent_index: {cycle_nodes[:20]}")
+
+    keyid2idx_tree = {
+        "num_c": num_c_tree,
+        "concepts": node_id_to_tree_idx,
+        "original_kc_id_to_tree_idx": original_kc_id_to_tree_idx,
+        "internal_node_id_to_tree_idx": internal_node_id_to_tree_idx,
+    }
+
+    tree_report = {
+        "kc_tree_path": kc_tree_path,
+        "tree_idx_source": "generated_preorder" if generated_tree_idx else "from_json",
+        "num_c_tree": num_c_tree,
+        "num_nodes": len(nodes),
+        "num_observed_leaf_kcs": len(original_kc_id_to_tree_idx),
+        "num_internal_nodes": len(internal_node_id_to_tree_idx),
+        "num_edges": sum(1 for p in parent_index if p >= 0),
+        "root_indices": [i for i, p in enumerate(parent_index) if p < 0],
+        "passed": True,
+    }
+
+    return keyid2idx_tree, parent_index, node_index, tree_report
 
 
 def remap_concepts_to_tree_indices(df, keyid2idx_tree, concepts_col="concepts", pad_val=-1):
@@ -653,7 +792,7 @@ def remap_concepts_to_tree_indices(df, keyid2idx_tree, concepts_col="concepts", 
 
     if missing:
         raise ValueError(
-            "Some observed concept ids were not matched to any tree node's kc_id. "
+            "Some observed concept ids are not found as kc_leaf nodes in the tree JSON. "
             f"Missing examples: {sorted(missing)[:20]}"
         )
 
@@ -692,10 +831,7 @@ def id_mapping_tree(df, keyid2idx_tree):
                 for raw_id in row[key].split(","):
                     raw_id = raw_id.strip()
                     if raw_id not in leaf_map:
-                        raise ValueError(
-                            f"Observed KC id {raw_id!r} has no tree node with matching kc_id "
-                            "(see kc_knowledge_tree.json / keyid2idx_tree original_kc_id_to_tree_idx)."
-                        )
+                        raise ValueError(f"Observed KC id {raw_id!r} is not a kc_leaf in the tree JSON.")
                     curids.append(str(leaf_map[raw_id]))
                 dres[key].append(",".join(curids))
                 continue
@@ -856,7 +992,7 @@ def main(dname, fname, dataset_name, configf, min_seq_len=3, maxlen=200, kfold=5
     """Split and preprocess a KT dataset.
 
     Tree mode is enabled automatically for dataset names ending with `_tree`.
-    In tree mode, this script expects kc_knowledge_tree.json and writes:
+    In tree mode, this script expects kc_knowledge_tree_slim.json and writes:
       - keyid2idx.json: ordinary pyKT mapping, but concepts covers all tree nodes
       - keyid2idx_tree.json: tree-specific mapping
       - tree_parent_index.json: compact parent index used by qid_tree
@@ -881,8 +1017,8 @@ def main(dname, fname, dataset_name, configf, min_seq_len=3, maxlen=200, kfold=5
         if not kc_tree_path:
             raise FileNotFoundError(
                 f"Dataset {dataset_name!r} is a tree dataset, but no tree JSON was found under {dname}. "
-                "Expected kc_knowledge_tree.json under the dataset folder, metadata folder, "
-                "tree folder, or 2_DBE_KT22_datafiles_100102_csv folder."
+                "Expected kc_knowledge_tree_slim.json under the dataset folder, metadata folder, "
+                "or 2_DBE_KT22_datafiles_100102_csv folder."
             )
         keyid2idx_tree, parent_index, node_index, tree_report = build_tree_artifacts(kc_tree_path)
         other_config["kc_tree_path"] = kc_tree_path
@@ -891,18 +1027,10 @@ def main(dname, fname, dataset_name, configf, min_seq_len=3, maxlen=200, kfold=5
         print(f"kc_tree_path: {kc_tree_path}")
         print(
             f"tree nodes: {tree_report['num_c_tree']}, "
-            f"unique tree kc_id labels: {tree_report['num_observed_leaf_kcs']}, "
-            f"leaf placements: {tree_report.get('num_leaf_placements', 'n/a')}, "
+            f"leaf KCs: {tree_report['num_observed_leaf_kcs']}, "
             f"internal nodes: {tree_report['num_internal_nodes']}, "
             f"edges: {tree_report['num_edges']}"
         )
-        if tree_report.get("duplicate_kc_id_collapsed_placements", 0):
-            print(
-                "(note) same kc_id on multiple tree placements (leaf or internal): "
-                "extra placements ignored when mapping interactions to embeddings "
-                f"({tree_report['duplicate_kc_id_collapsed_placements']} collisions; "
-                "first preorder placement kept)"
-            )
 
     total_df, effective_keys = read_data(fname)
 
@@ -1014,3 +1142,82 @@ def main(dname, fname, dataset_name, configf, min_seq_len=3, maxlen=200, kfold=5
         print(f"  {os.path.join(dname, 'tree_node_index.json')}")
         print(f"  {os.path.join(dname, 'tree_mapping_report.json')}")
     print("\n".join(stares))
+
+
+def process_raw_data(dataset_name, dname2paths):
+    """Convert raw source file to pyKT 6-line `data.txt`, return (dname, write_file)."""
+    is_tree_dataset = dataset_name.endswith("_tree")
+    base_dataset = dataset_name[:-5] if is_tree_dataset else dataset_name
+
+    # Do not silently fallback tree dataset to non-tree source path.
+    if is_tree_dataset and dataset_name not in dname2paths:
+        raise KeyError(
+            f"Missing raw path mapping for tree dataset {dataset_name!r}. "
+            "Please add it to dname2paths explicitly."
+        )
+
+    src_key = dataset_name if dataset_name in dname2paths else base_dataset
+    if src_key not in dname2paths:
+        raise KeyError(f"Unknown dataset_name: {dataset_name}")
+
+    read_file = dname2paths[src_key]
+    dname = os.path.dirname(dname2paths.get(dataset_name, read_file))
+    write_file = os.path.join(dname, "data.txt")
+
+    if base_dataset == "assist2017":
+        from .assist2017_preprocess import read_data_from_csv
+        read_data_from_csv(read_file, write_file)
+    elif base_dataset == "assist2009":
+        from .assist2009_preprocess import read_data_from_csv
+        read_data_from_csv(read_file, write_file)
+    elif base_dataset == "assist2012":
+        from .assist2012_preprocess import read_data_from_csv
+        read_data_from_csv(read_file, write_file)
+    elif base_dataset == "assist2015":
+        from .assist2015_preprocess import read_data_from_csv
+        read_data_from_csv(read_file, write_file)
+    elif base_dataset == "algebra2005":
+        from .algebra2005_preprocess import read_data_from_csv
+        read_data_from_csv(read_file, write_file)
+    elif base_dataset == "bridge2algebra2006":
+        from .bridge2algebra2006_preprocess import read_data_from_csv
+        read_data_from_csv(read_file, write_file)
+    elif base_dataset == "statics2011":
+        from .statics2011_preprocess import read_data_from_csv
+        read_data_from_csv(read_file, write_file)
+    elif base_dataset == "nips_task34":
+        from .nips_task34_preprocess import read_data_from_csv
+        read_data_from_csv(read_file, os.path.join(dname, "metadata"), "task_3_4", write_file)
+    elif base_dataset == "poj":
+        from .poj_preprocess import read_data_from_csv
+        read_data_from_csv(read_file, write_file)
+    elif base_dataset == "slepemapy":
+        from .slepemapy_preprocess import read_data_from_csv
+        read_data_from_csv(read_file, write_file)
+    elif base_dataset == "xes3g5m":
+        from .xes3g5m_preprocess import read_data_from_csv
+        read_data_from_csv(read_file, write_file)
+    elif base_dataset == "junyi2015":
+        from .junyi2015_preprocess import read_data_from_csv, load_q2c
+        dq2c = load_q2c(os.path.join(dname, "junyi_Exercise_table.csv"))
+        read_data_from_csv(read_file, write_file, dq2c)
+    elif base_dataset == "peiyou":
+        from .aaai2022_competition import read_data_from_csv, load_q2c
+        dq2c = load_q2c(os.path.join(dname, "map_questions.json"))
+        read_data_from_csv(read_file, write_file, dq2c)
+    elif base_dataset in {"ednet", "ednet5w"}:
+        from .ednet_preprocess import read_data_from_csv
+        read_data_from_csv(read_file, write_file, dataset_name=base_dataset)
+    elif base_dataset == "dbe_kt22":
+        from .dbe_kt22_preprocess import read_data_from_json
+        read_data_from_json(read_file, write_file)
+    elif base_dataset == "yousician":
+        from .yousician_preprocess import read_data_from_json
+        read_data_from_json(read_file, write_file)
+    elif base_dataset == "yousician_fmkc":
+        from .yousician_preprocess_kc_fmkc import read_data_from_json
+        read_data_from_json(read_file, write_file)
+    else:
+        raise NotImplementedError(f"process_raw_data not implemented for dataset: {dataset_name}")
+
+    return dname, write_file

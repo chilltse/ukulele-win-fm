@@ -176,7 +176,7 @@ class SAKT(Module):
             default_path = os.path.join(
                 dpath,
                 "2_DBE_KT22_datafiles_100102_csv",
-                "kc_knowledge_tree.json",
+                "kc_knowledge_tree_original.json",
             )
             if os.path.exists(default_path):
                 return default_path
@@ -189,17 +189,10 @@ class SAKT(Module):
                 "emb_type qid_tree requires kc_tree_path or default tree json under dpath."
             )
 
-        tree_keyid2idx_path = os.path.join(dpath, "keyid2idx_tree.json")
-        default_keyid2idx_path = os.path.join(dpath, "keyid2idx.json")
-        keyid2idx_path = (
-            tree_keyid2idx_path
-            if os.path.exists(tree_keyid2idx_path)
-            else default_keyid2idx_path
-        )
+        keyid2idx_path = os.path.join(dpath, "keyid2idx.json")
         if not os.path.exists(keyid2idx_path):
             raise FileNotFoundError(
-                f"emb_type qid_tree requires keyid2idx_tree.json or keyid2idx.json under dpath, "
-                f"missing: {tree_keyid2idx_path} and {default_keyid2idx_path}"
+                f"emb_type qid_tree requires keyid2idx.json under dpath, missing: {keyid2idx_path}"
             )
 
         with open(tree_path, "r", encoding="utf-8") as f:
@@ -209,7 +202,7 @@ class SAKT(Module):
 
         concepts_map = keyid2idx.get("concepts", {})
         if not concepts_map:
-            raise ValueError(f"{os.path.basename(keyid2idx_path)} has no `concepts` mapping for qid_tree.")
+            raise ValueError("keyid2idx.json has no `concepts` mapping for qid_tree.")
 
         kc_name_to_id = {}
         for item in tree_data.get("kc_index", []):

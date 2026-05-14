@@ -39,6 +39,21 @@ class AKT(nn.Module):
         num_c_fmkc=None,
         dpath="",
         kc_tree_path="",
+        # qid_tree controls. Defaults are conservative: no parent loss and no
+        # parent prediction fusion unless explicitly enabled in config.
+        tree_embed_mode=None,# "independent", "inherit"
+        tree_aux_loss_weight=0.3,
+        tree_aux_loss_mode="depth", #"none" "direct" "depth" "specified" "all"
+        tree_aux_max_depth=2,
+        tree_aux_depths=None, # 只在tree_aux_loss_mode="specified"时使用。
+        tree_pred_fusion_mode="depth_decay", # "none", "direct_parent", "ancestor_mean", "depth_mean", "specified_mean", "ancestor_decay", "depth_decay", "specified_decay", "gated_direct_parent"
+        tree_pred_fusion_weight=0.8,
+        tree_pred_max_depth=2,
+        tree_pred_depths=None, # 只在"specified_mean" "specified_decay"时使用。
+        tree_aux_ignore_first=None,
+        tree_max_ancestor_depth=2,
+        tree_pred_occurrence_decay=0.1,
+        tree_label_level_up=0,
     ):
         super().__init__()
 
@@ -62,6 +77,114 @@ class AKT(nn.Module):
         self.emb_type = emb_type
         self.num_c_fmkc = num_c_fmkc
         self.dpath = dpath
+
+        # ------------------------------------------------------------------
+        # qid_tree behavior controls
+        # ------------------------------------------------------------------
+        # Keep these controls explicit at training entry (wandb_akt_train.py),
+        # not hidden as model-internal defaults.
+        if emb_type == "qid_tree":
+            # ------------------------------------------------------------------
+            # Decoupled qid_tree setting
+            # ------------------------------------------------------------------
+            # Design principle:
+            #   1) Training loss is leaf-only. Parent/ancestor nodes do NOT
+            #      contribute auxiliary loss and do NOT change the training logits.
+            #   2) Parent/ancestor nodes participate only at prediction/evaluation
+            #      time through depth-decayed ancestor prior.
+            #   3) The AKT encoder remains leaf-centered and unchanged.
+            required_tree_args = {
+                "tree_embed_mode": tree_embed_mode,
+                "tree_pred_fusion_mode": tree_pred_fusion_mode,
+                "tree_pred_fusion_weight": tree_pred_fusion_weight,
+                "tree_pred_max_depth": tree_pred_max_depth,
+                "tree_max_ancestor_depth": tree_max_ancestor_depth,
+            }
+            missing_tree_args = [k for k, v in required_tree_args.items() if v is None]
+            if missing_tree_args:
+                raise ValueError(
+                    "AKT qid_tree requires explicit tree prediction hyperparameters from training entry; "
+                    f"missing: {missing_tree_args}. "
+                    "Please set them in examples/wandb_akt_train.py CLI."
+                )
+
+            # tree_embed_mode:
+            #   independent: child/node embedding is its own embedding only.
+            #   inherit:     child embedding is a gated combination of own + parent.
+            self.tree_embed_mode = str(tree_embed_mode).lower()
+
+            # IMPORTANT:
+            # Training-time ancestor auxiliary supervision is intentionally disabled.
+            # This prevents coarse-grained parent nodes from backpropagating into
+            # the leaf-centered AKT encoder/output head through an auxiliary loss.
+            # We keep these attributes only for compatibility with old config files.
+            self.tree_aux_loss_weight = 0.0
+            self.tree_aux_loss_mode = "none"
+            self.tree_aux_max_depth = 1 if tree_aux_max_depth is None else int(tree_aux_max_depth)
+            self.tree_aux_depths = []
+
+            # Only depth_decay is allowed as the parent/ancestor prediction mechanism
+            # in the decoupled design. Use "none" for ablation.
+            self.tree_pred_fusion_mode = self._normalize_tree_pred_mode(tree_pred_fusion_mode)
+            self.tree_pred_fusion_weight = float(tree_pred_fusion_weight)
+            self.tree_pred_occurrence_decay = (
+                self.tree_pred_fusion_weight
+                if tree_pred_occurrence_decay is None
+                else float(tree_pred_occurrence_decay)
+            )
+            self.tree_pred_max_depth = int(tree_pred_max_depth)
+            self.tree_pred_depths = self._parse_tree_depths_arg(tree_pred_depths)
+            self.tree_aux_ignore_first = True if tree_aux_ignore_first is None else bool(tree_aux_ignore_first)
+            self.tree_max_ancestor_depth = int(tree_max_ancestor_depth)
+            self.tree_label_level_up = int(tree_label_level_up)
+
+            valid_tree_embed_modes = {"independent"}
+            valid_tree_pred_modes = {"none", "depth_decay"}
+
+            if self.tree_embed_mode not in valid_tree_embed_modes:
+                raise ValueError(f"Invalid tree_embed_mode={tree_embed_mode}. Valid: {valid_tree_embed_modes}")
+            if self.tree_pred_fusion_mode not in valid_tree_pred_modes:
+                raise ValueError(
+                    f"Invalid tree_pred_fusion_mode={tree_pred_fusion_mode}. "
+                    f"For the decoupled design, valid modes are: {valid_tree_pred_modes}."
+                )
+            if not (0.0 <= self.tree_pred_fusion_weight <= 1.0):
+                raise ValueError("tree_pred_fusion_weight must be in [0, 1].")
+            if self.tree_pred_occurrence_decay < 0.0:
+                raise ValueError("tree_pred_occurrence_decay must be non-negative.")
+            if self.tree_max_ancestor_depth <= 0:
+                raise ValueError("tree_max_ancestor_depth must be positive.")
+            if self.tree_pred_fusion_mode == "depth_decay" and self.tree_pred_max_depth <= 0:
+                raise ValueError("tree_pred_max_depth must be positive when tree_pred_fusion_mode='depth_decay'.")
+            if self.tree_label_level_up < 0:
+                raise ValueError("tree_label_level_up must be >= 0.")
+
+            max_requested_depth = 1
+            if self.tree_pred_fusion_mode == "depth_decay":
+                max_requested_depth = max(max_requested_depth, self.tree_pred_max_depth)
+
+            # Do not silently ignore a requested depth.
+            if max_requested_depth > self.tree_max_ancestor_depth:
+                raise ValueError(
+                    f"Requested ancestor depth {max_requested_depth}, but "
+                    f"tree_max_ancestor_depth={self.tree_max_ancestor_depth}. "
+                    "Increase tree_max_ancestor_depth or reduce tree_pred_max_depth."
+                )
+        else:
+            # Non-qid_tree modes never read these controls; keep placeholders.
+            self.tree_embed_mode = "independent"
+            self.tree_aux_loss_weight = 0.0
+            self.tree_aux_loss_mode = "none"
+            self.tree_aux_max_depth = 1
+            self.tree_aux_depths = []
+            self.tree_pred_fusion_mode = "none"
+            self.tree_pred_fusion_weight = 0.0
+            self.tree_pred_occurrence_decay = 0.0
+            self.tree_pred_max_depth = 1
+            self.tree_pred_depths = []
+            self.tree_aux_ignore_first = True
+            self.tree_max_ancestor_depth = 1
+            self.tree_label_level_up = 0
 
         embed_l = d_model
 
@@ -126,31 +249,69 @@ class AKT(nn.Module):
             self.qa_embed = nn.Embedding(2, embed_l)
 
         # ------------------------------------------------------------------
-        # qid_tree: inherited tree KC embedding branch
+        # qid_tree: leaf branch + fully decoupled non-leaf branch
         # ------------------------------------------------------------------
         elif emb_type == "qid_tree":
             if separate_qa:
                 raise ValueError("qid_tree does not support separate_qa")
 
+            # Leaf AKT branch: unchanged AKT-style KC/response embeddings.
+            # Parent/internal nodes never construct leaf embeddings.
             self.residual_kc_emb = nn.Embedding(self.n_question, embed_l)
             self.response_emb = nn.Embedding(2, embed_l)
-            self.tree_mlp = nn.Sequential(
-                nn.Linear(embed_l, embed_l),
-                nn.ReLU(),
-            )
-            # Per child node edge scalar a; use sigmoid(a) in forward.
-            self.edge_alpha = nn.Parameter(torch.zeros(self.n_question))
 
             parent_index = self._build_tree_parent_index(kc_tree_path, dpath)
-            self.register_buffer(
-                "parent_index",
-                torch.tensor(parent_index, dtype=torch.long),
+            self.register_buffer("parent_index", torch.tensor(parent_index, dtype=torch.long))
+
+            ancestor_index, ancestor_mask = self._build_ancestor_index(
+                parent_index,
+                max_depth=self.tree_max_ancestor_depth,
             )
-            topo_index = self._build_topo_order(parent_index)
-            self.register_buffer(
-                "topo_index",
-                torch.tensor(topo_index, dtype=torch.long),
+            self.register_buffer("ancestor_index", torch.tensor(ancestor_index, dtype=torch.long))
+            self.register_buffer("ancestor_mask", torch.tensor(ancestor_mask, dtype=torch.bool))
+
+            # Non-leaf branch: completely separate embedding, encoder, and output head.
+            # It never reuses leaf d_output or self.out.
+            self.ancestor_kc_emb = nn.Embedding(self.n_question, embed_l)
+            self.ancestor_response_emb = nn.Embedding(2, embed_l)
+            self.ancestor_model = Architecture(
+                n_question=n_question,
+                n_blocks=n_blocks,
+                n_heads=num_attn_heads,
+                dropout=dropout,
+                d_model=d_model,
+                d_feature=d_model / num_attn_heads,
+                d_ff=d_ff,
+                kq_same=self.kq_same,
+                model_type=self.model_type,
+                emb_type=self.emb_type,
             )
+            self.ancestor_out = nn.Sequential(
+                nn.Linear(d_model + embed_l, final_fc_dim),
+                nn.ReLU(),
+                nn.Dropout(self.dropout),
+                nn.Linear(final_fc_dim, 256),
+                nn.ReLU(),
+                nn.Dropout(self.dropout),
+                nn.Linear(256, 1),
+            )
+
+            # Optional independent training loss for the non-leaf branch.
+            # This trains only ancestor_* parameters because the branch is separate.
+            self.tree_branch_loss_weight = 0.0 if tree_aux_loss_weight is None else float(tree_aux_loss_weight)
+
+            print("\n========== qid_tree behavior ==========")
+            print(f"tree_embed_mode = {self.tree_embed_mode}")
+            print(f"tree_pred_fusion_mode = {self.tree_pred_fusion_mode}")
+            print(f"tree_pred_fusion_weight = {self.tree_pred_fusion_weight}")
+            print(f"tree_pred_occurrence_decay = {self.tree_pred_occurrence_decay}")
+            print(f"tree_pred_max_depth = {self.tree_pred_max_depth}")
+            print(f"tree_label_level_up = {self.tree_label_level_up}")
+            print(f"tree_branch_loss_weight = {self.tree_branch_loss_weight}")
+            print("leaf_and_nonleaf_forward_decoupled = True")
+            print("nonleaf_contribution_to_leaf = depth_decay only")
+            print(f"tree_max_ancestor_depth(table capacity) = {self.tree_max_ancestor_depth}")
+            print("=======================================\n")
 
         # ------------------------------------------------------------------
         # Original qid branch
@@ -229,88 +390,509 @@ class AKT(nn.Module):
             torch.nn.init.constant_(self.difficult_param.weight, 0.0)
 
     # ------------------------------------------------------------------
+    # qid_tree depth-selection helpers
+    # ------------------------------------------------------------------
+
+    def _normalize_tree_aux_mode(self, mode):
+        mode = str(mode).lower().strip()
+        aliases = {
+            "direct_parent": "direct",
+            "parent": "direct",
+            "parents": "direct",
+            "ancestors": "depth",
+            "upto_depth": "depth",
+            "max_depth": "depth",
+            "specified_ancestors": "specified",
+            "selected": "specified",
+            "all_ancestors": "all",
+        }
+        return aliases.get(mode, mode)
+
+    def _normalize_tree_pred_mode(self, mode):
+        mode = str(mode).lower().strip()
+        aliases = {
+            "direct": "direct_parent",
+            "parent": "direct_parent",
+            "parents": "direct_parent",
+            "all": "ancestor_mean",
+            "all_ancestors": "ancestor_mean",
+            "ancestors_mean": "ancestor_mean",
+            "ancestor_depth_mean": "depth_decay",
+            "depth": "depth_decay",
+            "decay": "depth_decay",
+            "depth_decayed": "depth_decay",
+            "specified": "specified_mean",
+            "specified_ancestors": "specified_mean",
+            "selected": "specified_mean",
+            "all_decay": "ancestor_decay",
+            "ancestor_exp_decay": "ancestor_decay",
+            "ancestors_decay": "ancestor_decay",
+            "depth_exp_decay": "depth_decay",
+            "specified_exp_decay": "specified_decay",
+            "gated_direct": "gated_direct_parent",
+        }
+        return aliases.get(mode, mode)
+
+    def _parse_tree_depths_arg(self, depths):
+        if depths is None:
+            return []
+        if isinstance(depths, int):
+            vals = [depths]
+        elif isinstance(depths, str):
+            text = depths.strip()
+            if not text:
+                vals = []
+            else:
+                vals = [int(x.strip()) for x in text.split(",") if x.strip()]
+        elif isinstance(depths, (list, tuple, set)):
+            vals = [int(x) for x in depths]
+        else:
+            raise ValueError(f"Unsupported depth argument type: {type(depths)}")
+
+        vals = sorted(set(vals))
+        if any(d <= 0 for d in vals):
+            raise ValueError(f"Ancestor depths must be positive 1-based integers, got {vals}")
+        return vals
+
+    def _depth_keep_mask(self, adepth, mode, max_depth=None, depths=None, device=None):
+        """Return a boolean mask over ancestor dimension [A]. Depth is 1-based."""
+        device = device if device is not None else self.parent_index.device
+        if mode == "all":
+            return torch.ones(adepth, dtype=torch.bool, device=device)
+        if mode == "direct":
+            depths = [1]
+        elif mode == "depth":
+            if max_depth is None or int(max_depth) <= 0:
+                raise ValueError("max_depth must be positive for mode='depth'.")
+            depths = list(range(1, int(max_depth) + 1))
+        elif mode == "specified":
+            if not depths:
+                raise ValueError("depths must be non-empty for mode='specified'.")
+            depths = [int(d) for d in depths]
+        else:
+            raise ValueError(f"Unknown depth selection mode: {mode}")
+
+        keep = torch.zeros(adepth, dtype=torch.bool, device=device)
+        for d in depths:
+            if 1 <= int(d) <= adepth:
+                keep[int(d) - 1] = True
+        return keep
+
+    def _select_aux_ancestor_valid(self, ancestor_valid):
+        """Select which ancestor depths participate in auxiliary loss."""
+        adepth = ancestor_valid.size(-1)
+        if self.tree_aux_loss_mode == "all":
+            keep = self._depth_keep_mask(adepth, "all", device=ancestor_valid.device)
+        elif self.tree_aux_loss_mode == "depth":
+            keep = self._depth_keep_mask(
+                adepth,
+                "depth",
+                max_depth=self.tree_aux_max_depth,
+                device=ancestor_valid.device,
+            )
+        elif self.tree_aux_loss_mode == "specified":
+            keep = self._depth_keep_mask(
+                adepth,
+                "specified",
+                depths=self.tree_aux_depths,
+                device=ancestor_valid.device,
+            )
+        elif self.tree_aux_loss_mode == "direct":
+            keep = self._depth_keep_mask(adepth, "direct", device=ancestor_valid.device)
+        else:
+            raise ValueError(f"Cannot select aux ancestors for mode={self.tree_aux_loss_mode}")
+        return ancestor_valid & keep.view(1, 1, -1)
+
+    def _select_pred_ancestor_valid(self, ancestor_valid):
+        """Select which ancestor depths participate in prediction fusion."""
+        adepth = ancestor_valid.size(-1)
+        if self.tree_pred_fusion_mode in {"ancestor_mean", "ancestor_decay"}:
+            keep = self._depth_keep_mask(adepth, "all", device=ancestor_valid.device)
+        elif self.tree_pred_fusion_mode in {"depth_mean", "depth_decay"}:
+            keep = self._depth_keep_mask(
+                adepth,
+                "depth",
+                max_depth=self.tree_pred_max_depth,
+                device=ancestor_valid.device,
+            )
+        elif self.tree_pred_fusion_mode in {"specified_mean", "specified_decay"}:
+            keep = self._depth_keep_mask(
+                adepth,
+                "specified",
+                depths=self.tree_pred_depths,
+                device=ancestor_valid.device,
+            )
+        else:
+            raise ValueError(f"Cannot select prediction ancestors for mode={self.tree_pred_fusion_mode}")
+        return ancestor_valid & keep.view(1, 1, -1)
+
+    def _tree_count_previous_occurrences(self, q_data):
+        """
+        Count how many times each leaf/tree node id has appeared earlier in
+        the same sequence. This is used as a cold-start confidence signal:
+        ancestors help most when count_before is small.
+        """
+        if q_data.dim() != 2:
+            raise ValueError(
+                f"qid_tree occurrence decay expects q_data shape [B, L], got {tuple(q_data.shape)}"
+            )
+
+        with torch.no_grad():
+            q_valid = (q_data >= 0) & (q_data < self.n_question)
+            safe_q = q_data.long().clamp(0, self.n_question - 1)
+            seqlen = safe_q.size(1)
+
+            # previous_mask[i, j] is True when position j is before position i.
+            previous_mask = torch.tril(
+                torch.ones(seqlen, seqlen, dtype=torch.bool, device=q_data.device),
+                diagonal=-1,
+            )
+
+            same_kc = safe_q.unsqueeze(2).eq(safe_q.unsqueeze(1))
+            valid_pair = q_valid.unsqueeze(2) & q_valid.unsqueeze(1)
+            count_before = (same_kc & valid_pair & previous_mask.view(1, seqlen, seqlen)).sum(dim=-1)
+
+        return count_before.float()
+
+    def _tree_occurrence_gate(self, q_data):
+        """
+        Exponential cold-start gate:
+            gate = exp(-lambda * count_before)
+
+        count_before=0 -> gate=1, so ancestors can help cold-start KCs.
+        As the leaf KC appears more often, gate approaches 0 and prediction
+        relies increasingly on the leaf-level logit.
+        """
+        count_before = self._tree_count_previous_occurrences(q_data)
+        return torch.exp(-float(self.tree_pred_occurrence_decay) * count_before)
+
+    def _tree_promote_labels(self, node_ids):
+        """
+        Promote qid_tree concept ids upward by configured parent levels.
+
+        tree_label_level_up=0: keep original node ids (default behavior)
+        tree_label_level_up=1: use direct parent ids (coarser by one level)
+        tree_label_level_up=2: parent of parent, and so on
+        """
+        if self.tree_label_level_up <= 0:
+            return node_ids
+
+        valid = (node_ids >= 0) & (node_ids < self.n_question)
+        promoted = node_ids.long().clamp(0, self.n_question - 1)
+        for _ in range(self.tree_label_level_up):
+            parent = self.parent_index[promoted]
+            has_parent = parent >= 0
+            # If a node already has no parent, keep it at current level.
+            promoted = torch.where(has_parent, parent, promoted)
+        promoted = promoted.masked_fill(~valid, -1)
+        return promoted
+
+    def _tree_depth_decay_weights(self, adepth, device):
+        """
+        Depth-decay weights over ancestors. Depth is 1-based:
+            parent      depth=1 -> w
+            grandparent depth=2 -> w^2
+            ...
+        """
+        depths = torch.arange(1, adepth + 1, dtype=torch.float32, device=device)
+        base = torch.tensor(float(self.tree_pred_fusion_weight), dtype=torch.float32, device=device)
+        return torch.pow(base, depths).view(1, 1, adepth)
+
+    # ------------------------------------------------------------------
     # Utilities for qid_tree
     # ------------------------------------------------------------------
 
-    def _resolve_tree_path(self, kc_tree_path, dpath):
-        if kc_tree_path and os.path.exists(kc_tree_path):
-            return kc_tree_path
-        if dpath:
-            default_path = os.path.join(
-                dpath,
-                "2_DBE_KT22_datafiles_100102_csv",
-                "kc_knowledge_tree.json",
-            )
-            if os.path.exists(default_path):
-                return default_path
-        return ""
+    # def _resolve_tree_path(self, kc_tree_path, dpath):
+    #     if kc_tree_path and os.path.exists(kc_tree_path):
+    #         return kc_tree_path
+    #     if dpath:
+    #         default_path = os.path.join(
+    #             dpath,
+    #             "2_DBE_KT22_datafiles_100102_csv",
+    #             "kc_knowledge_tree_original.json",
+    #         )
+    #         if os.path.exists(default_path):
+    #             return default_path
+    #     return ""
+
+    # def _build_tree_parent_index(self, kc_tree_path, dpath):
+    #     tree_path = self._resolve_tree_path(kc_tree_path, dpath)
+    #     if not tree_path:
+    #         raise FileNotFoundError(
+    #             "emb_type qid_tree requires kc_tree_path or default tree json under dpath."
+    #         )
+
+    #     keyid2idx_path = os.path.join(dpath, "keyid2idx.json")
+    #     if not os.path.exists(keyid2idx_path):
+    #         raise FileNotFoundError(
+    #             f"emb_type qid_tree requires keyid2idx.json under dpath, missing: {keyid2idx_path}"
+    #         )
+
+    #     with open(tree_path, "r", encoding="utf-8") as f:
+    #         tree_data = json.load(f)
+    #     with open(keyid2idx_path, "r", encoding="utf-8") as f:
+    #         keyid2idx = json.load(f)
+
+    #     concepts_map = keyid2idx.get("concepts", {})
+    #     if not concepts_map:
+    #         raise ValueError("keyid2idx.json has no `concepts` mapping for qid_tree.")
+
+    #     kc_name_to_id = {}
+    #     for item in tree_data.get("kc_index", []):
+    #         name = str(item.get("name", "")).strip()
+    #         kc_id = item.get("kc_id", None)
+    #         if name and kc_id is not None:
+    #             kc_name_to_id[name] = int(kc_id)
+
+    #     child_to_parent_kc = {}
+    #     for edge in tree_data.get("non_tree_prerequisite_edges", []):
+    #         parent_name = str(edge.get("from", "")).strip()
+    #         child_name = str(edge.get("to", "")).strip()
+    #         if parent_name in kc_name_to_id and child_name in kc_name_to_id:
+    #             child_to_parent_kc[kc_name_to_id[child_name]] = kc_name_to_id[parent_name]
+
+    #     parent_index = [-1] * self.n_question
+    #     for raw_kc, mapped_idx in concepts_map.items():
+    #         try:
+    #             child_kc_id = int(raw_kc)
+    #         except Exception:
+    #             continue
+
+    #         parent_kc_id = child_to_parent_kc.get(child_kc_id, None)
+    #         if parent_kc_id is None:
+    #             continue
+
+    #         parent_raw = str(parent_kc_id)
+    #         if parent_raw not in concepts_map:
+    #             continue
+
+    #         cidx = int(mapped_idx)
+    #         pidx = int(concepts_map[parent_raw])
+    #         if 0 <= cidx < self.n_question and 0 <= pidx < self.n_question:
+    #             parent_index[cidx] = pidx
+
+    #     return parent_index
 
     def _build_tree_parent_index(self, kc_tree_path, dpath):
-        tree_path = self._resolve_tree_path(kc_tree_path, dpath)
-        if not tree_path:
-            raise FileNotFoundError(
-                "emb_type qid_tree requires kc_tree_path or default tree json under dpath."
-            )
+        if not dpath:
+            if kc_tree_path:
+                dpath = os.path.dirname(kc_tree_path)
+            else:
+                dpath, kc_tree_path = self._infer_tree_paths_from_config()
 
-        tree_keyid2idx_path = os.path.join(dpath, "keyid2idx_tree.json")
-        default_keyid2idx_path = os.path.join(dpath, "keyid2idx.json")
-        keyid2idx_path = (
-            tree_keyid2idx_path
-            if os.path.exists(tree_keyid2idx_path)
-            else default_keyid2idx_path
-        )
-        if not os.path.exists(keyid2idx_path):
+        tree_path = self._resolve_tree_path(kc_tree_path, dpath)
+
+        keyid2idx_tree_path = os.path.join(dpath, "keyid2idx_tree.json")
+        if not os.path.exists(keyid2idx_tree_path):
             raise FileNotFoundError(
-                f"emb_type qid_tree requires keyid2idx_tree.json or keyid2idx.json under dpath, "
-                f"missing: {tree_keyid2idx_path} and {default_keyid2idx_path}"
+                "Standardized qid_tree index mapping not found. "
+                f"Expected file: {keyid2idx_tree_path}"
             )
 
         with open(tree_path, "r", encoding="utf-8") as f:
             tree_data = json.load(f)
-        with open(keyid2idx_path, "r", encoding="utf-8") as f:
-            keyid2idx = json.load(f)
 
-        concepts_map = keyid2idx.get("concepts", {})
+        with open(keyid2idx_tree_path, "r", encoding="utf-8") as f:
+            keyid2idx_tree = json.load(f)
+
+        concepts_map = keyid2idx_tree.get("concepts", {})
+        tree_num_c = int(keyid2idx_tree.get("num_c", len(concepts_map)))
+
         if not concepts_map:
-            raise ValueError(f"{os.path.basename(keyid2idx_path)} has no `concepts` mapping for qid_tree.")
+            raise ValueError("keyid2idx_tree.json has no `concepts` mapping for qid_tree.")
 
-        kc_name_to_id = {}
-        for item in tree_data.get("kc_index", []):
-            name = str(item.get("name", "")).strip()
-            kc_id = item.get("kc_id", None)
-            if name and kc_id is not None:
-                kc_name_to_id[name] = int(kc_id)
+        if tree_num_c <= 0:
+            raise ValueError("keyid2idx_tree.json has invalid `num_c` for qid_tree.")
 
-        child_to_parent_kc = {}
-        for edge in tree_data.get("non_tree_prerequisite_edges", []):
-            parent_name = str(edge.get("from", "")).strip()
-            child_name = str(edge.get("to", "")).strip()
-            if parent_name in kc_name_to_id and child_name in kc_name_to_id:
-                child_to_parent_kc[kc_name_to_id[child_name]] = kc_name_to_id[parent_name]
+        # Do not mask config bugs: qid_tree should initialize with tree num_c.
+        if self.n_question != tree_num_c:
+            raise ValueError(
+                "num_c mismatch for qid_tree. "
+                f"Model num_c={self.n_question}, keyid2idx_tree num_c={tree_num_c}. "
+                "Use num_c_tree when initializing qid_tree model."
+            )
 
-        parent_index = [-1] * self.n_question
-        for raw_kc, mapped_idx in concepts_map.items():
-            try:
-                child_kc_id = int(raw_kc)
-            except Exception:
+        # ---------------------------------------------------------
+        # 1) Recursively collect all nodes from nested JSON.
+        # ---------------------------------------------------------
+        nodes = []
+
+        def collect_nodes(obj):
+            if isinstance(obj, list):
+                for x in obj:
+                    collect_nodes(x)
+                return
+
+            if not isinstance(obj, dict):
+                return
+
+            nodes.append(obj)
+
+            for child in obj.get("children", []) or []:
+                collect_nodes(child)
+
+        collect_nodes(tree_data)
+
+        # ---------------------------------------------------------
+        # 2) Directly build parent_index using:
+        #
+        #    child_node_id  -> concepts[child_node_id]
+        #    parent_node_id -> concepts[parent_node_id]
+        #
+        # Your keyid2idx_tree.json already contains both internal
+        # nodes and leaf KCs, so we do not need kc_id conversion here.
+        # ---------------------------------------------------------
+        parent_index = [-1] * tree_num_c
+
+        raw_edges = 0
+        mapped_edges = 0
+        skipped_child_missing = 0
+        skipped_parent_missing = 0
+        skipped_out_of_range = 0
+
+        for node in nodes:
+            child_node_id = node.get("node_id", None)
+            parent_node_id = node.get("parent_id", None)
+
+            # Root node has no parent.
+            if child_node_id is None or parent_node_id is None:
                 continue
 
-            parent_kc_id = child_to_parent_kc.get(child_kc_id, None)
-            if parent_kc_id is None:
+            child_raw = str(child_node_id)
+            parent_raw = str(parent_node_id)
+
+            raw_edges += 1
+
+            if child_raw not in concepts_map:
+                skipped_child_missing += 1
                 continue
 
-            parent_raw = str(parent_kc_id)
             if parent_raw not in concepts_map:
+                skipped_parent_missing += 1
                 continue
 
-            cidx = int(mapped_idx)
-            pidx = int(concepts_map[parent_raw])
-            if 0 <= cidx < self.n_question and 0 <= pidx < self.n_question:
-                parent_index[cidx] = pidx
+            child_idx = int(concepts_map[child_raw])
+            parent_idx = int(concepts_map[parent_raw])
+
+            if not (0 <= child_idx < tree_num_c and 0 <= parent_idx < tree_num_c):
+                skipped_out_of_range += 1
+                continue
+
+            parent_index[child_idx] = parent_idx
+            mapped_edges += 1
+
+        # ---------------------------------------------------------
+        # 3) Debug log.
+        # ---------------------------------------------------------
+        leaf_count = sum(1 for n in nodes if n.get("type") == "kc_leaf")
+        internal_count = sum(1 for n in nodes if n.get("type") == "internal")
+        parent_edges = sum(1 for p in parent_index if p >= 0)
+        root_or_no_parent_nodes = sum(1 for p in parent_index if p < 0)
+
+        print("\n========== qid_tree debug ==========")
+        print(f"tree_path = {tree_path}")
+        print(f"keyid2idx_tree_path = {keyid2idx_tree_path}")
+        print(f"input num_c = {self.n_question}")
+        print(f"tree_num_c = {tree_num_c}")
+        print(f"concepts in keyid2idx_tree = {len(concepts_map)}")
+        print(f"json total nodes = {len(nodes)}")
+        print(f"json internal nodes = {internal_count}")
+        print(f"json leaf nodes = {leaf_count}")
+        print(f"raw json edges = {raw_edges}")
+        print(f"mapped parent edges = {mapped_edges}")
+        print(f"parent_edges in parent_index = {parent_edges}")
+        print(f"root_or_no_parent_nodes = {root_or_no_parent_nodes}")
+        print(f"skipped_child_missing = {skipped_child_missing}")
+        print(f"skipped_parent_missing = {skipped_parent_missing}")
+        print(f"skipped_out_of_range = {skipped_out_of_range}")
+
+        if parent_edges > 0:
+            print("tree structure status = USED")
+            print("sample mapped parent edges: child_idx -> parent_idx")
+            shown = 0
+            for cidx, pidx in enumerate(parent_index):
+                if pidx >= 0:
+                    print(f"  {cidx} -> {pidx}")
+                    shown += 1
+                    if shown >= 10:
+                        break
+        else:
+            print("tree structure status = NOT USED / NO VALID PARENT EDGES MAPPED")
+            print("warning: qid_tree may have degraded to independent residual KC embeddings.")
+
+        print("====================================\n")
 
         return parent_index
 
+    def _infer_tree_paths_from_config(self):
+        """Infer tree dpath/tree file when caller forgot to pass them."""
+        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        cfg_path = os.path.join(repo_root, "configs", "data_config.json")
+        if not os.path.exists(cfg_path):
+            raise ValueError(
+                "qid_tree requires dpath/kc_tree_path, and config file not found for fallback: "
+                f"{cfg_path}"
+            )
+
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+
+        hits = []
+        for dname, item in cfg.items():
+            if not item.get("kc_tree", False):
+                continue
+            tree_num_c = item.get("num_c_tree", item.get("num_c", -1))
+            if int(tree_num_c) != int(self.n_question):
+                continue
+            dpath = item.get("dpath", "")
+            if not dpath:
+                continue
+            hits.append((dname, dpath))
+
+        if len(hits) != 1:
+            raise ValueError(
+                "qid_tree requires explicit dpath/kc_tree_path in AKT init. "
+                f"Auto-infer candidates by num_c={self.n_question}: {hits}"
+            )
+
+        _, dpath = hits[0]
+        return dpath, os.path.join(dpath, "kc_knowledge_tree.json")
+
+    def _resolve_tree_path(self, kc_tree_path, dpath):
+        if not dpath:
+            if kc_tree_path:
+                dpath = os.path.dirname(kc_tree_path)
+            else:
+                dpath, kc_tree_path = self._infer_tree_paths_from_config()
+
+        expected_tree_path = os.path.abspath(os.path.join(dpath, "kc_knowledge_tree.json"))
+
+        # Root-cause guard: stale/contaminated config may pass a tree file from another dataset.
+        if kc_tree_path:
+            given_tree_path = os.path.abspath(kc_tree_path)
+            if os.path.normcase(given_tree_path) != os.path.normcase(expected_tree_path):
+                raise ValueError(
+                    "kc_tree_path points outside current dataset directory. "
+                    f"Expected: {expected_tree_path}, got: {given_tree_path}"
+                )
+
+        if not os.path.exists(expected_tree_path):
+            raise FileNotFoundError(
+                "Standardized qid_tree path not found. "
+                f"Expected file: {expected_tree_path}"
+            )
+
+        return expected_tree_path
+
     def _build_topo_order(self, parent_index):
+        """
+        Return parent-before-child order.
+
+        This is only needed for tree_embed_mode="inherit". We still build it
+        for debugging and for safe backward compatibility. Unlike the previous
+        implementation, this version raises an error if a cycle is detected,
+        because a cycle means the JSON is not a valid tree/DAG for inheritance.
+        """
         n = len(parent_index)
         state = [0] * n
         order = []
@@ -319,7 +901,10 @@ class AKT(nn.Module):
             if state[u] == 2:
                 return
             if state[u] == 1:
-                return
+                raise ValueError(
+                    "Cycle detected in parent_index while building qid_tree topology. "
+                    "Please check kc_knowledge_tree.json / keyid2idx_tree.json."
+                )
             state[u] = 1
             p = parent_index[u]
             if 0 <= p < n:
@@ -332,8 +917,64 @@ class AKT(nn.Module):
 
         return order
 
+    def _build_ancestor_index(self, parent_index, max_depth=16):
+        """
+        Build fixed-shape ancestor lookup tables.
+
+        ancestor_index[c, d] is the d-th ancestor of node c, starting from
+        direct parent. Invalid slots are 0 and masked out by ancestor_mask.
+        """
+        n = len(parent_index)
+        ancestor_index = [[0 for _ in range(max_depth)] for _ in range(n)]
+        ancestor_mask = [[False for _ in range(max_depth)] for _ in range(n)]
+
+        truncated_nodes = 0
+        for c in range(n):
+            seen = set([c])
+            p = parent_index[c]
+            depth = 0
+            while 0 <= p < n:
+                if p in seen:
+                    raise ValueError(
+                        f"Cycle detected when collecting ancestors for node {c}."
+                    )
+                if depth >= max_depth:
+                    truncated_nodes += 1
+                    break
+                ancestor_index[c][depth] = int(p)
+                ancestor_mask[c][depth] = True
+                seen.add(p)
+                p = parent_index[p]
+                depth += 1
+
+        if truncated_nodes > 0:
+            print(
+                f"warning: {truncated_nodes} qid_tree nodes have ancestors deeper "
+                f"than tree_max_ancestor_depth={max_depth}; deeper ancestors are ignored."
+            )
+
+        return ancestor_index, ancestor_mask
+
     def _tree_kc_table(self):
+        """
+        Return embedding table for all tree nodes.
+
+        independent mode:
+            node embedding = its own residual embedding.
+            No parent-to-child embedding inheritance.
+
+        inherit mode:
+            old behavior. child embedding = gated combination of projected
+            parent embedding and own residual embedding.
+        """
         residual = self.residual_kc_emb.weight
+
+        if self.tree_embed_mode == "independent":
+            return residual
+
+        if self.tree_embed_mode != "inherit":
+            raise ValueError(f"Unknown tree_embed_mode: {self.tree_embed_mode}")
+
         node_embs = [None] * self.n_question
 
         for idx in self.topo_index.tolist():
@@ -351,6 +992,10 @@ class AKT(nn.Module):
         return torch.stack(node_embs, dim=0)
 
     def tree_kc_embed(self, q_data):
+        """
+        Embed tree node ids. Supports q_data with shape [B, L] or [B, L, A].
+        Invalid ids are embedded as zero vectors.
+        """
         q_valid = (q_data >= 0) & (q_data < self.n_question)
         safe_q = q_data.long().clamp(0, self.n_question - 1)
 
@@ -359,6 +1004,166 @@ class AKT(nn.Module):
         q_embed_data = q_embed_data * q_valid.unsqueeze(-1).float()
         return q_embed_data
 
+    def _direct_parent_ids(self, q_data):
+        """Return direct parent id and valid mask for each q_data token."""
+        q_valid = (q_data >= 0) & (q_data < self.n_question)
+        safe_q = q_data.long().clamp(0, self.n_question - 1)
+        parent_ids = self.parent_index[safe_q]
+        parent_valid = q_valid & (parent_ids >= 0)
+        parent_ids = parent_ids.masked_fill(~parent_valid, 0)
+        return parent_ids.long(), parent_valid
+
+    def _ancestor_ids(self, q_data):
+        """Return all ancestor ids and valid mask for each q_data token."""
+        q_valid = (q_data >= 0) & (q_data < self.n_question)
+        safe_q = q_data.long().clamp(0, self.n_question - 1)
+        ancestor_ids = self.ancestor_index[safe_q]
+        ancestor_valid = self.ancestor_mask[safe_q] & q_valid.unsqueeze(-1)
+        ancestor_ids = ancestor_ids.masked_fill(~ancestor_valid, 0)
+        return ancestor_ids.long(), ancestor_valid
+
+    def _tree_query_embed_with_difficulty(self, node_ids, pid_embed_data=None):
+        """
+        Build query embedding for tree node ids, optionally with AKT's Rasch
+        difficulty branch added. node_ids may be [B, L] or [B, L, A].
+        """
+        node_valid = (node_ids >= 0) & (node_ids < self.n_question)
+        safe_ids = node_ids.long().clamp(0, self.n_question - 1)
+        emb = self.tree_kc_embed(safe_ids)
+
+        if self.n_pid > 0 and pid_embed_data is not None:
+            diff = self.q_embed_diff(safe_ids.clamp(min=0, max=self.n_question))
+            pdiff = pid_embed_data
+            # pid_embed_data is [B, L, 1]. For ancestor embeddings [B, L, A, D],
+            # insert an ancestor dimension before the feature dimension.
+            while pdiff.dim() < diff.dim():
+                pdiff = pdiff.unsqueeze(-2)
+            emb = emb + pdiff * diff
+
+        emb = emb * node_valid.unsqueeze(-1).float()
+        return emb, node_valid
+
+    def _masked_bce_with_logits(self, logits, labels, mask):
+        """Stable BCE with an explicit boolean mask."""
+        mask = mask.bool()
+        if mask.sum().item() == 0:
+            return logits.new_tensor(0.0)
+        return F.binary_cross_entropy_with_logits(
+            logits[mask],
+            labels.float()[mask],
+            reduction="mean",
+        )
+
+    def _ancestor_base_emb(self, q_data, target):
+        """
+        Independent non-leaf branch embedding.
+
+        q_data is an ancestor-id sequence with shape [B*, L]. This branch has
+        its own KC embedding and response embedding, so it is fully decoupled
+        from the leaf AKT branch.
+        """
+        q_valid = (q_data >= 0) & (q_data < self.n_question)
+        target_valid = (target >= 0) & (target <= 1)
+
+        safe_q = q_data.long().clamp(0, self.n_question - 1)
+        safe_target = target.long().clamp(0, 1)
+
+        q_embed = self.ancestor_kc_emb(safe_q)
+        q_embed = q_embed * q_valid.unsqueeze(-1).float()
+
+        qa_embed = self.ancestor_response_emb(safe_target) + q_embed
+        qa_embed = qa_embed * (q_valid & target_valid).unsqueeze(-1).float()
+        return q_embed, qa_embed, q_valid & target_valid
+
+    def _ancestor_forward(self, q_data, target):
+        """
+        Run a separate AKT-style forward pass for ancestors.
+
+        Returns:
+            ancestor_logits: [B, L, A]
+            ancestor_valid:  [B, L, A]
+        """
+        ancestor_ids, ancestor_valid = self._ancestor_ids(q_data)
+        bsz, seqlen, adepth = ancestor_ids.shape
+
+        # Treat each depth as a separate sequence in the batch.
+        flat_q = ancestor_ids.permute(0, 2, 1).reshape(bsz * adepth, seqlen)
+        flat_valid = ancestor_valid.permute(0, 2, 1).reshape(bsz * adepth, seqlen)
+        flat_target = target.unsqueeze(1).expand(-1, adepth, -1).reshape(bsz * adepth, seqlen)
+
+        q_embed, qa_embed, target_valid = self._ancestor_base_emb(flat_q, flat_target)
+        branch_valid = flat_valid & target_valid
+
+        # Fully independent encoder. No leaf d_output is reused here.
+        d_output = self.ancestor_model(q_embed, qa_embed, None)
+        logits = self.ancestor_out(torch.cat([d_output, q_embed], dim=-1)).squeeze(-1)
+        logits = logits.masked_fill(~branch_valid, 0.0)
+
+        logits = logits.view(bsz, adepth, seqlen).permute(0, 2, 1).contiguous()
+        valid = branch_valid.view(bsz, adepth, seqlen).permute(0, 2, 1).contiguous()
+        return logits, valid
+
+    def _apply_depth_decay_fusion(self, leaf_logits, q_data, target):
+        """
+        Fuse leaf logits with independent ancestor logits using depth decay only.
+
+        parent      depth=1 -> w
+        grandparent depth=2 -> w^2
+        depth-d             -> w^d
+
+        Then multiply all ancestor weights by occurrence gate:
+            exp(-lambda * count_before)
+        """
+        if self.tree_pred_fusion_mode == "none":
+            return leaf_logits
+        if self.tree_pred_fusion_mode != "depth_decay":
+            raise ValueError("Decoupled tree prediction supports only 'none' or 'depth_decay'.")
+
+        ancestor_logits, ancestor_valid = self._ancestor_forward(q_data, target)
+        selected_valid = self._select_pred_ancestor_valid(ancestor_valid)
+        has_ancestor = selected_valid.any(dim=-1)
+
+        valid_float = selected_valid.float()
+        adepth = ancestor_logits.size(-1)
+        depth_weights = self._tree_depth_decay_weights(adepth, ancestor_logits.device)
+        ancestor_weights = valid_float * depth_weights
+
+        total_depth_weight = ancestor_weights.sum(dim=-1)
+        scale = torch.where(
+            total_depth_weight > 1.0,
+            1.0 / total_depth_weight.clamp(min=1e-8),
+            torch.ones_like(total_depth_weight),
+        )
+        ancestor_weights = ancestor_weights * scale.unsqueeze(-1)
+        total_depth_weight = ancestor_weights.sum(dim=-1)
+
+        occ_gate = self._tree_occurrence_gate(q_data)
+        ancestor_weights = ancestor_weights * occ_gate.unsqueeze(-1)
+        total_weight = total_depth_weight * occ_gate
+
+        ancestor_prior = (ancestor_logits * ancestor_weights).sum(dim=-1)
+        fused_logits = (1.0 - total_weight) * leaf_logits + ancestor_prior
+        return torch.where(has_ancestor, fused_logits, leaf_logits)
+
+    def _independent_ancestor_loss(self, q_data, target):
+        """
+        Optional independent loss for the non-leaf branch.
+
+        This loss trains only ancestor_kc_emb, ancestor_response_emb,
+        ancestor_model, and ancestor_out. It does not share the leaf encoder or
+        leaf prediction head, so it cannot backpropagate into the leaf branch.
+        """
+        if self.tree_branch_loss_weight <= 0.0:
+            return target.new_tensor(0.0, dtype=torch.float32)
+
+        ancestor_logits, ancestor_valid = self._ancestor_forward(q_data, target)
+        selected_valid = self._select_pred_ancestor_valid(ancestor_valid)
+        labels = target.float().unsqueeze(-1).expand_as(ancestor_logits)
+        loss = self._masked_bce_with_logits(ancestor_logits, labels, selected_valid)
+        return self.tree_branch_loss_weight * loss
+
+    # ------------------------------------------------------------------
+    # Utilities for FMKC
     # ------------------------------------------------------------------
     # Utilities for FMKC
     # ------------------------------------------------------------------
@@ -545,6 +1350,8 @@ class AKT(nn.Module):
         # Base question/KC embedding and QA embedding
         # ------------------------------------------------------------------
         if emb_type.startswith("qid"):
+            if emb_type == "qid_tree":
+                q_data = self._tree_promote_labels(q_data)
             q_embed_data, qa_embed_data = self.base_emb(
                 q_data,
                 target,
@@ -591,7 +1398,7 @@ class AKT(nn.Module):
 
             c_reg_loss = (pid_embed_data ** 2.0).sum() * self.l2
         else:
-            c_reg_loss = 0.0
+            c_reg_loss = q_embed_data.new_tensor(0.0)
 
         # ------------------------------------------------------------------
         # AKT architecture
@@ -600,13 +1407,29 @@ class AKT(nn.Module):
 
         concat_q = torch.cat([d_output, q_embed_data], dim=-1)
 
-        output = self.out(concat_q).squeeze(-1)
+        leaf_logits = self.out(concat_q).squeeze(-1)
+
+        # Optional qid_tree parent/ancestor prediction fusion.
+        if self.emb_type == "qid_tree":
+            # Leaf training is always leaf-only. The non-leaf branch is separate:
+            # it can have its own loss, but it never reuses leaf d_output or self.out.
+            if self.training and not qtest:
+                c_reg_loss = c_reg_loss + self._independent_ancestor_loss(q_data, target)
+                output = leaf_logits
+            elif self.tree_pred_fusion_mode != "none":
+                output = self._apply_depth_decay_fusion(leaf_logits, q_data, target)
+            else:
+                output = leaf_logits
+        else:
+            output = leaf_logits
 
         preds = torch.sigmoid(output)
 
         if not qtest:
             return preds, c_reg_loss
         else:
+            # concat_q is still the leaf-level representation, which is useful
+            # for compatibility with existing pyKT prediction utilities.
             return preds, c_reg_loss, concat_q
 
 

@@ -60,16 +60,10 @@ def cal_loss(model, ys, r, rshft, sm, preloss=[]):
         loss = binary_cross_entropy(y_next.double(), r_next.double())
 
         loss_r = binary_cross_entropy(y_curr.double(), r_curr.double()) # if answered wrong for C in t-1, cur answer for C should be wrong too
-        if getattr(model, "emb_type", "") == "qid_fmkc":
-            # y_curr has shape aligned with sm (B, T). Use its temporal diff so mask sm[:,1:] matches.
-            diff = ys[1][:, 1:] - ys[1][:, :-1]
-            loss_w1 = torch.masked_select(torch.abs(diff), sm[:, 1:]).mean()
-            loss_w2 = torch.masked_select(diff ** 2, sm[:, 1:]).mean()
-        else:
-            loss_w1 = torch.masked_select(torch.norm(ys[2][:, 1:] - ys[2][:, :-1], p=1, dim=-1), sm[:, 1:])
-            loss_w1 = loss_w1.mean() / model.num_c
-            loss_w2 = torch.masked_select(torch.norm(ys[2][:, 1:] - ys[2][:, :-1], p=2, dim=-1) ** 2, sm[:, 1:])
-            loss_w2 = loss_w2.mean() / model.num_c
+        loss_w1 = torch.masked_select(torch.norm(ys[2][:, 1:] - ys[2][:, :-1], p=1, dim=-1), sm[:, 1:])
+        loss_w1 = loss_w1.mean() / model.num_c
+        loss_w2 = torch.masked_select(torch.norm(ys[2][:, 1:] - ys[2][:, :-1], p=2, dim=-1) ** 2, sm[:, 1:])
+        loss_w2 = loss_w2.mean() / model.num_c
 
         loss = loss + model.lambda_r * loss_r + model.lambda_w1 * loss_w1 + model.lambda_w2 * loss_w2
     elif model_name in ["akt","extrakt","folibikt", "robustkt", "akt_vector", "akt_norasch", "akt_mono", "akt_attn", "aktattn_pos", "aktmono_pos", "akt_raschx", "akt_raschy", "aktvec_raschx","lefokt_akt", "dtransformer", "fluckt"]:
@@ -205,7 +199,14 @@ def model_forward(model, data, rel=None):
         # cat = torch.cat((d["at_seqs"][:,0:1], dshft["at_seqs"]), dim=1)
         cit = torch.cat((dcur["itseqs"][:,0:1], dcur["shft_itseqs"]), dim=1)
     if model_name in ["dkt"]:
-        if getattr(model, "emb_type", "") == "qid_fmkc":
+        if getattr(model, "emb_type", "") == "qid_tree":
+            # qid_tree has its own leaf+ancestor loss in model.get_qid_tree_loss(...).
+            y_full = model(c.long(), r.long(), None)
+            loss, details = model.get_qid_tree_loss(
+                y_full, c.long(), r.long(), return_details=True
+            )
+            model._last_qid_tree_loss_details = details
+        elif getattr(model, "emb_type", "") == "qid_fmkc":
             # DKT-fmkc returns target-conditioned predictions.
             # Feed full sequence and align y[:,1:] with rshft.
             if ccd is None:
@@ -214,14 +215,17 @@ def model_forward(model, data, rel=None):
         else:
             y = model(c.long(), r.long(), None)
             y = (y * one_hot(cshft.long(), model.num_c)).sum(-1)
-        ys.append(y)
+        if getattr(model, "emb_type", "") != "qid_tree":
+            ys.append(y)
     elif model_name == "dkt+":
         if getattr(model, "emb_type", "") == "qid_fmkc":
-            if ccd is None:
-                raise ValueError("dkt+ qid_fmkc requires concepts_dense in dataset as q_dense.")
-            y = model(cc.long(), cr.long(), ccd.long())
-            y_next = y[:, 1:]
-            y_curr = y[:, :-1]
+            if c_dense is None or cshft_dense is None:
+                raise ValueError("dkt+ qid_fmkc requires concepts_dense in dataset.")
+            # Keep the same causal timeline as qid:
+            # input is [t0..t_{L-2}], predict next on [t1..t_{L-1}].
+            y = model(c.long(), r.long())
+            y_next = (y * one_hot(cshft_dense.long(), model.num_c)).sum(-1)
+            y_curr = (y * one_hot(c_dense.long(), model.num_c)).sum(-1)
             ys = [y_next, y_curr, y]
         else:
             y = model(c.long(), r.long())
@@ -233,7 +237,10 @@ def model_forward(model, data, rel=None):
         y = (y * one_hot(cshft.long(), model.num_c)).sum(-1)
         ys.append(y)
     elif model_name in ["dkvmn","deep_irt", "skvmn"]:
-        y = model(cc.long(), cr.long())
+        if model_name == "dkvmn" and getattr(model, "use_question_input", False):
+            y = model(cq.long(), cr.long())
+        else:
+            y = model(cc.long(), cr.long())
         ys.append(y[:,1:])
     elif model_name in ["kqn", "sakt"]:
         if model_name == "sakt" and getattr(model, "emb_type", "") == "qid_fmkc":
@@ -289,6 +296,8 @@ def model_forward(model, data, rel=None):
         ys.append(y) 
 
     if model_name not in ["atkt", "atktfix"]+que_type_models or model_name in ["lpkt", "rkt"]:
+        if model_name == "dkt" and getattr(model, "emb_type", "") == "qid_tree":
+            return loss
         loss = cal_loss(model, ys, r, rshft, sm, preloss)
     if model_name in ["ukt"] and model.use_CL != 0:
         return loss,temp
@@ -298,6 +307,7 @@ def model_forward(model, data, rel=None):
 def train_model(model, train_loader, valid_loader, num_epochs, opt, ckpt_path, test_loader=None, test_window_loader=None, save_model=False, data_config=None, fold=None):
     max_auc, best_epoch = 0, -1
     train_step = 0
+    debug_decay_in_opt = None
 
     rel = None
     if model.model_name == "rkt":
@@ -314,6 +324,24 @@ def train_model(model, train_loader, valid_loader, num_epochs, opt, ckpt_path, t
 
     if model.model_name=='lpkt':
         scheduler = torch.optim.lr_scheduler.StepLR(opt, 10, gamma=0.5)
+    if (
+        model.model_name == "dkt"
+        and getattr(model, "emb_type", "") == "qid_tree"
+        and getattr(model, "tree_pred_fusion_mode", "") == "depth_decay"
+        and hasattr(model, "tree_pred_fusion_depth_decay_logit")
+    ):
+        decay_param = model.tree_pred_fusion_depth_decay_logit
+        debug_decay_in_opt = any(
+            any(p is decay_param for p in group["params"])
+            for group in opt.param_groups
+        )
+        print(
+            "[qid_tree_decay_debug:init] "
+            f"in_optimizer={debug_decay_in_opt}, "
+            f"requires_grad={decay_param.requires_grad}, "
+            f"raw_logit={decay_param.detach().item():.10f}, "
+            f"effective={model.get_tree_pred_fusion_depth_decay().detach().item():.10f}"
+        )
     for i in range(1, num_epochs + 1):
         loss_mean = []
         for data in train_loader:
@@ -329,12 +357,67 @@ def train_model(model, train_loader, valid_loader, num_epochs, opt, ckpt_path, t
             else:
                 loss = model_forward(model, data)
             opt.zero_grad()
+            decay_before = None
+            decay_raw_before = None
+            if (
+                model.model_name == "dkt"
+                and getattr(model, "emb_type", "") == "qid_tree"
+                and getattr(model, "tree_pred_fusion_mode", "") == "depth_decay"
+                and hasattr(model, "tree_pred_fusion_depth_decay_logit")
+            ):
+                decay_before = model.get_tree_pred_fusion_depth_decay().detach().item()
+                decay_raw_before = model.tree_pred_fusion_depth_decay_logit.detach().item()
             loss.backward()#compute gradients
+            decay_grad = None
+            if (
+                model.model_name == "dkt"
+                and getattr(model, "emb_type", "") == "qid_tree"
+                and getattr(model, "tree_pred_fusion_mode", "") == "depth_decay"
+                and hasattr(model, "tree_pred_fusion_depth_decay_logit")
+            ):
+                grad_tensor = model.tree_pred_fusion_depth_decay_logit.grad
+                if grad_tensor is not None:
+                    decay_grad = grad_tensor.detach().item()
             if model.model_name == "rkt":
                 clip_grad_norm_(model.parameters(), model.grad_clip)
             if model.model_name == "dtransformer":
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step()#update model’s parameters
+            if (
+                model.model_name == "dkt"
+                and getattr(model, "emb_type", "") == "qid_tree"
+                and getattr(model, "tree_pred_fusion_mode", "") == "depth_decay"
+                and hasattr(model, "tree_pred_fusion_depth_decay_logit")
+                and train_step % 50 == 0
+            ):
+                decay_after = model.get_tree_pred_fusion_depth_decay().detach().item()
+                decay_raw_after = model.tree_pred_fusion_depth_decay_logit.detach().item()
+                print(
+                    "[qid_tree_decay_debug:step] "
+                    f"step={train_step}, in_optimizer={debug_decay_in_opt}, "
+                    f"raw_before={decay_raw_before:.10f}, raw_after={decay_raw_after:.10f}, "
+                    f"eff_before={decay_before:.10f}, eff_after={decay_after:.10f}, "
+                    f"eff_delta={(decay_after - decay_before):.10e}, "
+                    f"grad={(decay_grad if decay_grad is not None else 'None')}"
+                )
+
+            if (
+                model.model_name == "dkt"
+                and getattr(model, "emb_type", "") == "qid_tree"
+                and train_step % 50 == 0
+            ):
+                details = getattr(model, "_last_qid_tree_loss_details", None)
+                if details is not None:
+                    leaf = float(details["leaf_loss"].item())
+                    anc = float(details["ancestor_loss"].item())
+                    total = float(details["total_loss"].item())
+                    vleaf = float(details["valid_leaf_count"].item())
+                    vanc = float(details["valid_ancestor_count"].item())
+                    print(
+                        "[qid_tree_loss] "
+                        f"step={train_step}, leaf={leaf:.6f}, ancestor={anc:.6f}, total={total:.6f}, "
+                        f"valid_leaf={vleaf:.0f}, valid_ancestor={vanc:.0f}"
+                    )
                 
             loss_mean.append(loss.detach().cpu().numpy())
             if model.model_name == "gkt" and train_step%10==0:
@@ -368,6 +451,17 @@ def train_model(model, train_loader, valid_loader, num_epochs, opt, ckpt_path, t
             validauc, validacc = auc, acc
         print(f"Epoch: {i}, validauc: {validauc:.4}, validacc: {validacc:.4}, best epoch: {best_epoch}, best auc: {max_auc:.4}, train loss: {loss_mean}, emb_type: {model.emb_type}, model: {model.model_name}, save_dir: {ckpt_path}")
         print(f"            testauc: {round(testauc,4)}, testacc: {round(testacc,4)}, window_testauc: {round(window_testauc,4)}, window_testacc: {round(window_testacc,4)}")
+        if (
+            model.model_name == "dkt"
+            and getattr(model, "emb_type", "") == "qid_tree"
+            and getattr(model, "tree_pred_fusion_mode", "") == "depth_decay"
+            and hasattr(model, "tree_pred_fusion_depth_decay_logit")
+        ):
+            print(
+                "[qid_tree_decay_debug:epoch] "
+                f"epoch={i}, raw_logit={model.tree_pred_fusion_depth_decay_logit.detach().item():.10f}, "
+                f"effective={model.get_tree_pred_fusion_depth_decay().detach().item():.10f}"
+            )
 
 
         if i - best_epoch >= 10:

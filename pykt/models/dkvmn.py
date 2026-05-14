@@ -7,23 +7,37 @@ from torch.nn import Module, Parameter, Embedding, Linear, Dropout
 from torch.nn.init import kaiming_normal_
 
 class DKVMN(Module):
-    def __init__(self, num_c, dim_s, size_m, dropout=0.2, emb_type='qid', emb_path="", pretrain_dim=768):
+    def __init__(
+        self,
+        num_c,
+        dim_s,
+        size_m,
+        dropout=0.2,
+        emb_type='qid',
+        emb_path="",
+        pretrain_dim=768,
+        num_q=None,
+        use_question_input=False,
+    ):
         super().__init__()
         self.model_name = "dkvmn"
         self.num_c = num_c
+        self.num_q = int(num_q) if num_q is not None else int(num_c)
+        self.use_question_input = bool(use_question_input)
         self.dim_s = dim_s
         self.size_m = size_m
         self.emb_type = emb_type
+        self.num_item = self.num_q if self.use_question_input else self.num_c
 
         if emb_type.startswith("qid"):
-            self.k_emb_layer = Embedding(self.num_c, self.dim_s)
+            self.k_emb_layer = Embedding(self.num_item, self.dim_s)
             self.Mk = Parameter(torch.Tensor(self.size_m, self.dim_s))
             self.Mv0 = Parameter(torch.Tensor(self.size_m, self.dim_s))
 
         kaiming_normal_(self.Mk)
         kaiming_normal_(self.Mv0)
 
-        self.v_emb_layer = Embedding(self.num_c * 2, self.dim_s)
+        self.v_emb_layer = Embedding(self.num_item * 2, self.dim_s)
 
         self.f_layer = Linear(self.dim_s * 2, self.dim_s)
         self.dropout_layer = Dropout(dropout)
@@ -36,8 +50,8 @@ class DKVMN(Module):
         emb_type = self.emb_type
         batch_size = q.shape[0]
         if emb_type == "qid":
-            # 当 r = 0 时： 索引范围在：0 ~ num_c-1； 当 r = 1 时：索引范围在：num_c ~ 2*num_c-1
-            x = q + self.num_c * r # 表示题目和response的embedding
+            # r=0 -> [0, num_item-1], r=1 -> [num_item, 2*num_item-1]
+            x = q + self.num_item * r
             k = self.k_emb_layer(q)
             v = self.v_emb_layer(x)
         

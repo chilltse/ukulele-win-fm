@@ -1,0 +1,11 @@
+union_level,union_file,model_name_requested,train_script,dataset_name,dataset_variant,status,error_stage,error_message,fold,modelname,embtype,testauc,testacc,window_testauc,window_testacc,validauc,validacc,best_epoch
+5,yousician_ukulele_union_level_5.json,dkt_plus,wandb_dkt_plus_train.py,yousician,baseline_qid,ok,,,0,dkt+,qid,-1,-1,-1,-1,0.7825210220574935,0.8264314235070743,23
+5,yousician_ukulele_union_level_5.json,dkt_plus,wandb_dkt_plus_train.py,yousician_fmkc,fmkc,failed,train,wandb_dkt_plus_train.py failed with exit code 1,0,,qid_fmkc,,,,,,,
+4,yousician_ukulele_union_level_4.json,dkt_plus,wandb_dkt_plus_train.py,yousician,baseline_qid,ok,,,0,dkt+,qid,-1,-1,-1,-1,0.8005436904229746,0.8352398559516244,18
+4,yousician_ukulele_union_level_4.json,dkt_plus,wandb_dkt_plus_train.py,yousician_fmkc,fmkc,failed,train,wandb_dkt_plus_train.py failed with exit code 1,0,,qid_fmkc,,,,,,,
+3,yousician_ukulele_union_level_3.json,dkt_plus,wandb_dkt_plus_train.py,yousician,baseline_qid,ok,,,0,dkt+,qid,-1,-1,-1,-1,0.8155477497953596,0.8465120598614907,24
+3,yousician_ukulele_union_level_3.json,dkt_plus,wandb_dkt_plus_train.py,yousician_fmkc,fmkc,failed,train,wandb_dkt_plus_train.py failed with exit code 1,0,,qid_fmkc,,,,,,,
+2,yousician_ukulele_union_level_2.json,dkt_plus,wandb_dkt_plus_train.py,yousician,baseline_qid,ok,,,0,dkt+,qid,-1,-1,-1,-1,0.806243653732456,0.8312753783684016,29
+2,yousician_ukulele_union_level_2.json,dkt_plus,wandb_dkt_plus_train.py,yousician_fmkc,fmkc,failed,train,wandb_dkt_plus_train.py failed with exit code 1,0,,qid_fmkc,,,,,,,
+1,yousician_ukulele_union_level_1.json,dkt_plus,wandb_dkt_plus_train.py,yousician,baseline_qid,ok,,,0,dkt+,qid,-1,-1,-1,-1,0.7977047431903248,0.8675393863422695,37
+1,yousician_ukulele_union_level_1.json,dkt_plus,wandb_dkt_plus_train.py,yousician_fmkc,fmkc,failed,train,wandb_dkt_plus_train.py failed with exit code 1,0,,qid_fmkc,,,,,,,

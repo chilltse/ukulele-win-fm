@@ -118,14 +118,14 @@
     },
     "assist2017": {
         "dpath": "../data/assist2017",
-        "num_q": 3162,
-        "num_c": 102,
+        "num_q": 233,
+        "num_c": 17,
         "input_type": [
             "questions",
             "concepts"
         ],
         "min_seq_len": 3,
-        "maxlen": 500,
+        "maxlen": 200,
         "emb_path": "",
         "train_valid_original_file": "train_valid.csv",
         "train_valid_file": "train_valid_sequences.csv",
@@ -140,7 +140,13 @@
         "test_file": "test_sequences.csv",
         "test_window_file": "test_window_sequences.csv",
         "test_question_file": "test_question_sequences.csv",
-        "test_question_window_file": "test_question_window_sequences.csv"
+        "test_question_window_file": "test_question_window_sequences.csv",
+        "max_concepts": 1,
+        "train_valid_original_file_quelevel": "train_valid_quelevel.csv",
+        "train_valid_file_quelevel": "train_valid_sequences_quelevel.csv",
+        "test_file_quelevel": "test_sequences_quelevel.csv",
+        "test_window_file_quelevel": "test_window_sequences_quelevel.csv",
+        "test_original_file_quelevel": "test_quelevel.csv"
     },
     "assist2012": {
         "dpath": "../data/assist2012",
@@ -467,20 +473,14 @@
         "test_original_file": "test.csv",
         "test_file": "test_sequences.csv",
         "test_window_file": "test_window_sequences.csv",
-        "kc_tree_path": "../data/xes3g5m_tree\\metadata\\kc_knowledge_tree.json",
+        "kc_tree_path": "../data/xes3g5m_tree\\metadata\\kc_knowledge_tree_original.json",
         "test_question_file": "test_question_sequences.csv",
         "test_question_window_file": "test_question_window_sequences.csv",
         "train_valid_original_file_quelevel": "train_valid_quelevel.csv",
         "train_valid_file_quelevel": "train_valid_sequences_quelevel.csv",
         "test_file_quelevel": "test_sequences_quelevel.csv",
         "test_window_file_quelevel": "test_window_sequences_quelevel.csv",
-        "test_original_file_quelevel": "test_quelevel.csv",
-        "kc_tree": true,
-        "num_c_tree": 1777,
-        "keyid2idx_tree_file": "keyid2idx_tree.json",
-        "tree_parent_index_file": "tree_parent_index.json",
-        "tree_node_index_file": "tree_node_index.json",
-        "tree_mapping_report_file": "tree_mapping_report.json"
+        "test_original_file_quelevel": "test_quelevel.csv"
     },
     "pretrain": {
         "dpath": "../data/pretrain",
@@ -516,8 +516,8 @@
     },
     "yousician": {
         "dpath": "../data/yousician",
-        "num_q": 1900,
-        "num_c": 1900,
+        "num_q": 460,
+        "num_c": 460,
         "input_type": [
             "questions",
             "concepts"
@@ -547,14 +547,14 @@
         "test_original_file_quelevel": "test_quelevel.csv"
     },
     "yousician_fmkc": {
-        "dpath": "G:\\ANU_course\\pykt-ukulele-May-WIN\\pykt-ukelele\\data\\yousician_fmkc",
-        "num_q": 2353,
-        "num_c": 2353,
+        "dpath": "../data/yousician_fmkc",
+        "num_q": 460,
+        "num_c": 460,
         "num_c_fmkc": [
-            217,
-            21,
-            223,
-            22
+            49,
+            11,
+            51,
+            11
         ],
         "kc_fmkc": true,
         "input_type": [
@@ -641,7 +641,7 @@
         "test_original_file": "test.csv",
         "test_file": "test_sequences.csv",
         "test_window_file": "test_window_sequences.csv",
-        "kc_tree_path": "../data/dbe_kt22_tree\\2_DBE_KT22_datafiles_100102_csv\\kc_knowledge_tree.json",
+        "kc_tree_path": "../data/dbe_kt22_tree\\2_DBE_KT22_datafiles_100102_csv\\kc_knowledge_tree_slim.json",
         "test_question_file": "test_question_sequences.csv",
         "test_question_window_file": "test_question_window_sequences.csv",
         "train_valid_original_file_quelevel": "train_valid_quelevel.csv",
@@ -658,8 +658,8 @@
     },
     "assist2017_tree": {
         "dpath": "../data/assist2017_tree",
-        "num_q": 3162,
-        "num_c": 102,
+        "num_q": 1258,
+        "num_c": 84,
         "input_type": [
             "questions",
             "concepts"
@@ -719,19 +719,19 @@
         "test_original_file": "test.csv",
         "test_file": "test_sequences.csv",
         "test_window_file": "test_window_sequences.csv",
-        "kc_tree": true,
-        "num_c_tree": 389,
-        "keyid2idx_tree_file": "keyid2idx_tree.json",
-        "tree_parent_index_file": "tree_parent_index.json",
-        "tree_node_index_file": "tree_node_index.json",
-        "tree_mapping_report_file": "tree_mapping_report.json",
-        "kc_tree_path": "../data/nips_task34_tree\\tree\\kc_knowledge_tree.json",
         "test_question_file": "test_question_sequences.csv",
         "test_question_window_file": "test_question_window_sequences.csv",
         "train_valid_original_file_quelevel": "train_valid_quelevel.csv",
         "train_valid_file_quelevel": "train_valid_sequences_quelevel.csv",
         "test_file_quelevel": "test_sequences_quelevel.csv",
         "test_window_file_quelevel": "test_window_sequences_quelevel.csv",
-        "test_original_file_quelevel": "test_quelevel.csv"
+        "test_original_file_quelevel": "test_quelevel.csv",
+        "kc_tree": true,
+        "num_c_tree": 389,
+        "keyid2idx_tree_file": "keyid2idx_tree.json",
+        "tree_parent_index_file": "tree_parent_index.json",
+        "tree_node_index_file": "tree_node_index.json",
+        "tree_mapping_report_file": "tree_mapping_report.json",
+        "kc_tree_path": "../data/nips_task34_tree\\kc_knowledge_tree.json"
     }
 }

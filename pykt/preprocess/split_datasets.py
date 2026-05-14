@@ -526,400 +526,11 @@ def generate_question_sequences(df, effective_keys, window=True, min_seq_len=3, 
 
 
 def save_id2idx(dkeyid2idx, save_path):
-    with open(save_path, "w", encoding="utf-8") as fout:
-        fout.write(json.dumps(dkeyid2idx, ensure_ascii=False, indent=4))
+    with open(save_path, "w+") as fout:
+        fout.write(json.dumps(dkeyid2idx))
 
 
-def _find_existing_path(paths):
-    for path in paths:
-        if path and os.path.exists(path):
-            return path
-    return ""
-
-
-def resolve_kc_tree_path(dname, dataset_name, explicit_path=None):
-    """Resolve the unified tree JSON path for *_tree datasets.
-
-    Preferred filename: kc_knowledge_tree.json.
-    """
-    if explicit_path:
-        return explicit_path if os.path.exists(explicit_path) else ""
-
-    candidates = []
-    if dataset_name in ["dbe_kt22_tree", "dbe_kt22"]:
-        candidates.extend([
-            os.path.join(dname, "2_DBE_KT22_datafiles_100102_csv", "kc_knowledge_tree.json"),
-        ])
-    if dataset_name == "xes3g5m_tree":
-        candidates.extend([
-            os.path.join(dname, "metadata", "kc_knowledge_tree.json"),
-        ])
-    if dataset_name == "nips_task34_tree":
-        candidates.extend([
-            os.path.join(dname, "tree", "kc_knowledge_tree.json"),
-        ])
-
-    candidates.extend([
-        os.path.join(dname, "kc_knowledge_tree.json"),
-    ])
-    return _find_existing_path(candidates)
-
-
-def load_tree_root(kc_tree_path):
-    """Load either a pure-node slim JSON or a metadata-wrapped tree JSON."""
-    with open(kc_tree_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    if isinstance(data, dict) and "tree" in data and isinstance(data["tree"], dict):
-        root = data["tree"]
-        wrapped = data
-    elif isinstance(data, dict) and "children" in data:
-        root = data
-        wrapped = None
-    else:
-        raise ValueError(
-            f"Unsupported KC tree JSON format: {kc_tree_path}. "
-            "Expected either a pure root node or a dict containing `tree`."
-        )
-    return root, wrapped
-
-
-def iter_tree_nodes(root):
-    stack = [(root, None)]
-    while stack:
-        node, parent = stack.pop()
-        yield node, parent
-        for child in reversed(node.get("children", []) or []):
-            stack.append((child, node))
-
-
-def ensure_tree_node_ids(root):
-    """Fill node_id / parent_id when the JSON omits them (e.g. xes3g5m route trie).
-
-    Uses the same preorder walk as iter_tree_nodes so embeddings stay deterministic.
-    Either every placement must define node_id, or none — mixed trees are rejected.
-    """
-    placements = list(iter_tree_nodes(root))
-    if not placements:
-        return
-    missing = sum(1 for node, _ in placements if "node_id" not in node)
-    if missing == 0:
-        return
-    if missing != len(placements):
-        probe = next((node for node, _ in placements if "node_id" not in node), None)
-        hint = ""
-        if probe is not None:
-            hint = (
-                f"type={probe.get('type')!r}, kc_id={probe.get('kc_id')!r}, "
-                f"name={repr(probe.get('name'))[:120]}"
-            )
-        raise ValueError(
-            "Tree JSON mixes nodes with and without node_id; refusing to normalize. "
-            f"missing_node_id_count={missing}/{len(placements)} {hint}".strip()
-        )
-
-    for idx, (node, parent) in enumerate(placements):
-        node["node_id"] = idx
-        if parent is None:
-            node["parent_id"] = None
-        elif "node_id" not in parent:
-            raise ValueError("Tree normalization bug: parent node has no node_id before child.")
-        else:
-            node["parent_id"] = int(parent["node_id"])
-
-
-def build_tree_artifacts(kc_tree_path, pad_val=-1):
-    """Build tree artifacts from kc_knowledge_tree.json.
-
-    Supported input JSON formats:
-      1) pure node tree: {node_id, type, name, parent_id, children}
-      2) pure node tree with explicit tree_idx fields
-      3) wrapper: {tree, parent_index, node_index, keyid2idx_tree, ...}
-
-    If tree_idx is missing, compact tree indices are generated automatically
-    from the traversal order. Therefore the JSON can stay as a clean node-only
-    tree file.
-
-    Returns:
-      keyid2idx_tree: full node_id -> tree_idx and leaf kc_id -> tree_idx
-      parent_index: parent_index[child_tree_idx] = parent_tree_idx or -1
-      node_index: node metadata indexed by tree_idx
-      tree_report: validation and coverage information
-    """
-    root, wrapped = load_tree_root(kc_tree_path)
-    ensure_tree_node_ids(root)
-
-    nodes = []
-    for node, parent in iter_tree_nodes(root):
-        if "node_id" not in node:
-            raise ValueError(
-                "Tree node missing node_id after normalization. "
-                f"type={node.get('type')!r}, kc_id={node.get('kc_id')!r}"
-            )
-        nodes.append((node, parent))
-
-    if not nodes:
-        raise ValueError(f"Tree JSON contains no nodes: {kc_tree_path}")
-
-    has_tree_idx = ["tree_idx" in node for node, _ in nodes]
-    if any(has_tree_idx) and not all(has_tree_idx):
-        bad = [node.get("name") for node, _ in nodes if "tree_idx" not in node][:20]
-        raise ValueError(
-            "Invalid tree JSON: either every node must have tree_idx, or no node should have tree_idx. "
-            f"Missing tree_idx examples: {bad}"
-        )
-
-    # If the slim JSON only contains node information, generate compact tree_idx
-    # deterministically according to the traversal order. This keeps the JSON clean
-    # while still producing contiguous embedding indices for qid_tree.
-    generated_tree_idx = not all(has_tree_idx)
-    if generated_tree_idx:
-        tree_idx_by_obj_id = {id(node): i for i, (node, _) in enumerate(nodes)}
-        get_tree_idx = lambda node: tree_idx_by_obj_id[id(node)]
-    else:
-        get_tree_idx = lambda node: int(node["tree_idx"])
-
-    node_id_to_tree_idx = {}
-    tree_idx_to_node = {}
-    duplicate_node_ids = []
-    duplicate_tree_indices = []
-
-    for node, _ in nodes:
-        node_id = int(node["node_id"])
-        tree_idx = int(get_tree_idx(node))
-        if str(node_id) in node_id_to_tree_idx:
-            duplicate_node_ids.append(node_id)
-        if tree_idx in tree_idx_to_node:
-            duplicate_tree_indices.append(tree_idx)
-        node_id_to_tree_idx[str(node_id)] = tree_idx
-        tree_idx_to_node[tree_idx] = node
-
-    if duplicate_node_ids or duplicate_tree_indices:
-        raise ValueError(
-            f"Invalid tree JSON: duplicate_node_ids={duplicate_node_ids}, "
-            f"duplicate_tree_indices={duplicate_tree_indices}"
-        )
-
-    num_c_tree = max(tree_idx_to_node.keys()) + 1 if tree_idx_to_node else 0
-    missing_tree_indices = [i for i in range(num_c_tree) if i not in tree_idx_to_node]
-    if missing_tree_indices:
-        raise ValueError(
-            "tree_idx must be contiguous from 0 to num_c-1. "
-            f"Missing: {missing_tree_indices[:20]}"
-        )
-
-    parent_index = [-1] * num_c_tree
-    node_index = [None] * num_c_tree
-    original_kc_id_to_tree_idx = {}
-    internal_node_id_to_tree_idx = {}
-    collapsed_duplicate_kc_ids = []
-    missing_parent_ids = []
-
-    for node, _ in nodes:
-        node_id = int(node["node_id"])
-        tree_idx = int(get_tree_idx(node))
-        parent_id = node.get("parent_id", None)
-        node_type = str(node.get("type", "") or "")
-        name = node.get("name", "")
-
-        if parent_id is not None:
-            parent_raw = str(int(parent_id))
-            if parent_raw not in node_id_to_tree_idx:
-                missing_parent_ids.append({"node_id": node_id, "parent_id": int(parent_id), "name": name})
-            else:
-                parent_index[tree_idx] = int(node_id_to_tree_idx[parent_raw])
-
-        meta = {
-            "tree_idx": tree_idx,
-            "node_id": node_id,
-            "type": node_type,
-            "name": name,
-            "parent_id": None if parent_id is None else int(parent_id),
-            "kc_id": None,
-            "is_observed_kc": False,
-        }
-
-        if node.get("kc_id", None) is not None:
-            kc_id = int(node["kc_id"])
-            meta["kc_id"] = kc_id
-            sk = str(kc_id)
-            # Interaction labels use numeric kc_id (xes: may be leaf or internal placement).
-            if sk not in original_kc_id_to_tree_idx:
-                original_kc_id_to_tree_idx[sk] = tree_idx
-            else:
-                collapsed_duplicate_kc_ids.append(kc_id)
-            meta["is_observed_kc"] = original_kc_id_to_tree_idx[sk] == tree_idx
-        else:
-            internal_node_id_to_tree_idx[str(node_id)] = tree_idx
-
-        node_index[tree_idx] = meta
-
-    if missing_parent_ids:
-        raise ValueError(f"Invalid tree JSON: missing parent IDs: {missing_parent_ids[:20]}")
-
-    # Cycle check over compact tree indices.
-    state = [0] * num_c_tree
-    cycle_nodes = []
-
-    def dfs(u):
-        if state[u] == 2:
-            return
-        if state[u] == 1:
-            cycle_nodes.append(u)
-            return
-        state[u] = 1
-        p = parent_index[u]
-        if 0 <= p < num_c_tree:
-            dfs(p)
-        state[u] = 2
-
-    for i in range(num_c_tree):
-        dfs(i)
-    if cycle_nodes:
-        raise ValueError(f"Cycle detected in tree parent_index: {cycle_nodes[:20]}")
-
-    keyid2idx_tree = {
-        "num_c": num_c_tree,
-        "concepts": node_id_to_tree_idx,
-        "original_kc_id_to_tree_idx": original_kc_id_to_tree_idx,
-        "internal_node_id_to_tree_idx": internal_node_id_to_tree_idx,
-    }
-
-    num_leaf_placements = sum(
-        1 for node, _ in nodes if str(node.get("type", "") or "") == "kc_leaf"
-    )
-    tree_report = {
-        "kc_tree_path": kc_tree_path,
-        "tree_idx_source": "generated_preorder" if generated_tree_idx else "from_json",
-        "num_c_tree": num_c_tree,
-        "num_nodes": len(nodes),
-        "num_leaf_placements": num_leaf_placements,
-        "num_observed_leaf_kcs": len(original_kc_id_to_tree_idx),
-        "duplicate_kc_id_collapsed_placements": len(collapsed_duplicate_kc_ids),
-        "num_internal_nodes": len(internal_node_id_to_tree_idx),
-        "num_edges": sum(1 for p in parent_index if p >= 0),
-        "root_indices": [i for i, p in enumerate(parent_index) if p < 0],
-        "passed": True,
-    }
-
-    return keyid2idx_tree, parent_index, node_index, tree_report
-
-
-def remap_concepts_to_tree_indices(df, keyid2idx_tree, concepts_col="concepts", pad_val=-1):
-    """Remap raw leaf KC ids in df[concepts] to tree_idx values.
-
-    This must run before sequence generation for qid_tree datasets, because the
-    Dataset loader reads CSV concepts directly as integer embedding indices.
-    """
-    if concepts_col not in df.columns:
-        return df
-
-    leaf_map = keyid2idx_tree.get("original_kc_id_to_tree_idx", {})
-    if not leaf_map:
-        raise ValueError("keyid2idx_tree has no original_kc_id_to_tree_idx mapping.")
-
-    df = copy.deepcopy(df)
-    missing = set()
-    remapped_rows = []
-
-    for _, row in df.iterrows():
-        new_tokens = []
-        for tok in str(row[concepts_col]).split(","):
-            tok = tok.strip()
-            if tok == str(pad_val):
-                new_tokens.append(str(pad_val))
-                continue
-            if tok not in leaf_map:
-                missing.add(tok)
-                new_tokens.append(tok)
-            else:
-                new_tokens.append(str(leaf_map[tok]))
-        remapped_rows.append(",".join(new_tokens))
-
-    if missing:
-        raise ValueError(
-            "Some observed concept ids were not matched to any tree node's kc_id. "
-            f"Missing examples: {sorted(missing)[:20]}"
-        )
-
-    df[concepts_col] = remapped_rows
-    return df
-
-
-def id_mapping_tree(df, keyid2idx_tree):
-    """Map questions/uids normally, but map concepts with the external tree_idx.
-
-    dkeyid2idx["concepts"] intentionally contains *all* tree nodes, not only
-    observed leaves. Therefore num_c for qid_tree becomes the full tree size.
-    """
-    id_keys = ["questions", "concepts", "uid"]
-    dres = dict()
-    dkeyid2idx = {
-        "concepts": dict(keyid2idx_tree["concepts"]),
-        "original_kc_id_to_tree_idx": dict(keyid2idx_tree.get("original_kc_id_to_tree_idx", {})),
-        "internal_node_id_to_tree_idx": dict(keyid2idx_tree.get("internal_node_id_to_tree_idx", {})),
-    }
-    leaf_map = keyid2idx_tree.get("original_kc_id_to_tree_idx", {})
-
-    print(f"df.columns (tree): {df.columns}")
-    for key in df.columns:
-        if key not in id_keys:
-            dres[key] = df[key]
-
-    for _, row in df.iterrows():
-        for key in id_keys:
-            if key not in df.columns:
-                continue
-            dres.setdefault(key, [])
-
-            if key == "concepts":
-                curids = []
-                for raw_id in row[key].split(","):
-                    raw_id = raw_id.strip()
-                    if raw_id not in leaf_map:
-                        raise ValueError(
-                            f"Observed KC id {raw_id!r} has no tree node with matching kc_id "
-                            "(see kc_knowledge_tree.json / keyid2idx_tree original_kc_id_to_tree_idx)."
-                        )
-                    curids.append(str(leaf_map[raw_id]))
-                dres[key].append(",".join(curids))
-                continue
-
-            dkeyid2idx.setdefault(key, dict())
-            curids = []
-            for raw_id in row[key].split(","):
-                if raw_id not in dkeyid2idx[key]:
-                    dkeyid2idx[key][raw_id] = len(dkeyid2idx[key])
-                curids.append(str(dkeyid2idx[key][raw_id]))
-            dres[key].append(",".join(curids))
-
-    finaldf = pd.DataFrame(dres)
-    return finaldf, dkeyid2idx
-
-
-def write_tree_artifacts(dname, keyid2idx_tree, parent_index, node_index, tree_report):
-    save_id2idx(keyid2idx_tree, os.path.join(dname, "keyid2idx_tree.json"))
-    save_id2idx(parent_index, os.path.join(dname, "tree_parent_index.json"))
-    save_id2idx(node_index, os.path.join(dname, "tree_node_index.json"))
-    save_id2idx(tree_report, os.path.join(dname, "tree_mapping_report.json"))
-
-
-def write_config(
-    dataset_name,
-    dkeyid2idx,
-    effective_keys,
-    configf,
-    dpath,
-    k=5,
-    min_seq_len=3,
-    maxlen=200,
-    flag=False,
-    other_config=None,
-    keyid2idx_tree=None,
-):
-    if other_config is None:
-        other_config = {}
-
+def write_config(dataset_name, dkeyid2idx, effective_keys, configf, dpath, k=5, min_seq_len=3, maxlen=200, flag=False, other_config={}):
     input_type, num_q, num_c = [], 0, 0
     if "questions" in effective_keys:
         input_type.append("questions")
@@ -932,7 +543,6 @@ def write_config(
                 raise ValueError("kc_fmkc requires non-empty concepts_dense mapping.")
         else:
             num_c = len(dkeyid2idx["concepts"])
-
     folds = list(range(0, k))
     dconfig = {
         "dpath": dpath,
@@ -948,45 +558,30 @@ def write_config(
         "folds": folds,
         "test_original_file": "test.csv",
         "test_file": "test_sequences.csv",
-        "test_window_file": "test_window_sequences.csv",
+        "test_window_file": "test_window_sequences.csv"
     }
-
     if "concepts_fmkc" in dkeyid2idx:
         c_fields = dkeyid2idx["concepts_fmkc"]
         dconfig["kc_fmkc"] = True
         dconfig["num_c_fmkc"] = [len(field_d) for field_d in c_fields]
-
-    if keyid2idx_tree is not None:
-        dconfig["kc_tree"] = True
-        dconfig["num_c_tree"] = int(keyid2idx_tree["num_c"])
-        dconfig["num_c"] = int(keyid2idx_tree["num_c"])
-        dconfig["keyid2idx_tree_file"] = "keyid2idx_tree.json"
-        dconfig["tree_parent_index_file"] = "tree_parent_index.json"
-        dconfig["tree_node_index_file"] = "tree_node_index.json"
-        dconfig["tree_mapping_report_file"] = "tree_mapping_report.json"
-
     dconfig.update(other_config)
-
     if flag:
         dconfig["test_question_file"] = "test_question_sequences.csv"
         dconfig["test_question_window_file"] = "test_question_window_sequences.csv"
 
     # load old config
-    if not os.path.exists(configf):
-        data_config = {dataset_name: dconfig}
-    else:
-        with open(configf, encoding="utf-8") as fin:
-            read_text = fin.read()
-            if read_text.strip() == "":
-                data_config = {dataset_name: dconfig}
+    with open(configf) as fin:
+        read_text = fin.read()
+        if read_text.strip() == "":
+            data_config = {dataset_name: dconfig}
+        else:
+            data_config = json.loads(read_text)
+            if dataset_name in data_config:
+                data_config[dataset_name].update(dconfig)
             else:
-                data_config = json.loads(read_text)
-                if dataset_name in data_config:
-                    data_config[dataset_name].update(dconfig)
-                else:
-                    data_config[dataset_name] = dconfig
+                data_config[dataset_name] = dconfig
 
-    with open(configf, "w", encoding="utf-8") as fout:
+    with open(configf, "w") as fout:
         data = json.dumps(data_config, ensure_ascii=False, indent=4)
         fout.write(data)
 
@@ -1038,145 +633,134 @@ def get_max_concepts(df):
 
 
 def main(dname, fname, dataset_name, configf, min_seq_len=3, maxlen=200, kfold=5):
-    """Split and preprocess a KT dataset.
+    """split main function
 
-    Tree mode is enabled automatically for dataset names ending with `_tree`.
-    In tree mode, this script expects kc_knowledge_tree.json and writes:
-      - keyid2idx.json: ordinary pyKT mapping, but concepts covers all tree nodes
-      - keyid2idx_tree.json: tree-specific mapping
-      - tree_parent_index.json: compact parent index used by qid_tree
-      - tree_node_index.json: metadata for interpretability
-      - tree_mapping_report.json: validation report
+    Args:
+        dname (str): data folder path
+        fname (str): the data file used to split, needs 6 columns, format is: (NA indicates the dataset has no corresponding info)
+            uid,seqlen: 50121,4
+            quetion ids: NA
+            concept ids: 7014,7014,7014,7014
+            responses: 0,1,1,1
+            timestamps: NA
+            cost times: NA
+        dataset_name (str): dataset name
+        configf (str): the dataconfig file path
+        min_seq_len (int, optional): the min seqlen, sequences less than this value will be filtered out. Defaults to 3.
+        maxlen (int, optional): the max seqlen. Defaults to 200.
+        kfold (int, optional): the folds num needs to split. Defaults to 5.
 
-    Important for qid_tree:
-      CSV concepts are remapped from original leaf kc_id to tree_idx.
-      Internal parent nodes are included in num_c but do not appear in sequences.
     """
     stares = []
 
-    is_tree_dataset = dataset_name.endswith("_tree")
-    other_config = {}
-    keyid2idx_tree = None
-    parent_index = None
-    node_index = None
-    tree_report = None
-
-    if is_tree_dataset:
-        kc_tree_path = resolve_kc_tree_path(dname, dataset_name)
-        if not kc_tree_path:
-            raise FileNotFoundError(
-                f"Dataset {dataset_name!r} is a tree dataset, but no tree JSON was found under {dname}. "
-                "Expected kc_knowledge_tree.json under the dataset folder, metadata folder, "
-                "tree folder, or 2_DBE_KT22_datafiles_100102_csv folder."
-            )
-        keyid2idx_tree, parent_index, node_index, tree_report = build_tree_artifacts(kc_tree_path)
-        other_config["kc_tree_path"] = kc_tree_path
-        print("=" * 20)
-        print(f"Tree mode enabled for {dataset_name}")
-        print(f"kc_tree_path: {kc_tree_path}")
-        print(
-            f"tree nodes: {tree_report['num_c_tree']}, "
-            f"unique tree kc_id labels: {tree_report['num_observed_leaf_kcs']}, "
-            f"leaf placements: {tree_report.get('num_leaf_placements', 'n/a')}, "
-            f"internal nodes: {tree_report['num_internal_nodes']}, "
-            f"edges: {tree_report['num_edges']}"
-        )
-        if tree_report.get("duplicate_kc_id_collapsed_placements", 0):
-            print(
-                "(note) same kc_id on multiple tree placements (leaf or internal): "
-                "extra placements ignored when mapping interactions to embeddings "
-                f"({tree_report['duplicate_kc_id_collapsed_placements']} collisions; "
-                "first preorder placement kept)"
-            )
-
     total_df, effective_keys = read_data(fname)
-
-    # cal max_concepts on the original raw concept string before id mapping
-    if "concepts" in effective_keys:
+    # cal max_concepts
+    if 'concepts' in effective_keys:
         max_concepts = get_max_concepts(total_df)
     else:
         max_concepts = -1
 
     oris, _, qs, cs, seqnum = calStatistics(total_df, stares, "original")
-    print("=" * 20)
-    print(f"original total interactions: {oris}, qs: {qs}, cs: {cs}, seqnum: {seqnum}")
+    print("="*20)
+    print(
+        f"original total interactions: {oris}, qs: {qs}, cs: {cs}, seqnum: {seqnum}")
 
     total_df, effective_keys = extend_multi_concepts(total_df, effective_keys)
-
     if dataset_name == "yousician_fmkc":
         total_df, dkeyid2idx = id_mapping_fmkc(total_df)
         effective_keys.add("concepts_dense")
-    elif is_tree_dataset:
-        if keyid2idx_tree is None:
-            raise ValueError("Internal error: tree dataset has no keyid2idx_tree.")
-        total_df, dkeyid2idx = id_mapping_tree(total_df, keyid2idx_tree)
     else:
         total_df, dkeyid2idx = id_mapping(total_df)
-
     dkeyid2idx["max_concepts"] = max_concepts
 
-    extends, _, qs, cs, seqnum = calStatistics(total_df, stares, "extend multi")
-    print("=" * 20)
-    print(f"after extend multi, total interactions: {extends}, qs: {qs}, cs: {cs}, seqnum: {seqnum}")
+    extends, _, qs, cs, seqnum = calStatistics(
+        total_df, stares, "extend multi")
+    print("="*20)
+    print(
+        f"after extend multi, total interactions: {extends}, qs: {qs}, cs: {cs}, seqnum: {seqnum}")
 
-    # In tree mode, keyid2idx.json now contains the full tree-node concept mapping.
     save_id2idx(dkeyid2idx, os.path.join(dname, "keyid2idx.json"))
-    if is_tree_dataset:
-        write_tree_artifacts(dname, keyid2idx_tree, parent_index, node_index, tree_report)
-
     effective_keys.add("fold")
     config = []
     for key in ALL_KEYS:
         if key in effective_keys:
             config.append(key)
-
     # train test split & generate sequences
     train_df, test_df = train_test_split(total_df, 0.2)
     splitdf = KFold_split(train_df, kfold)
-
+    # TODO
     splitdf[config].to_csv(os.path.join(dname, "train_valid.csv"), index=None)
-    ins, ss, qs, cs, seqnum = calStatistics(splitdf, stares, "original train+valid")
-    print(f"train+valid original interactions num: {ins}, select num: {ss}, qs: {qs}, cs: {cs}, seqnum: {seqnum}")
+    ins, ss, qs, cs, seqnum = calStatistics(
+        splitdf, stares, "original train+valid")
+    print(
+        f"train+valid original interactions num: {ins}, select num: {ss}, qs: {qs}, cs: {cs}, seqnum: {seqnum}")
+    split_seqs = generate_sequences(
+        splitdf, effective_keys, min_seq_len, maxlen)
+    ins, ss, qs, cs, seqnum = calStatistics(
+        split_seqs, stares, "train+valid sequences")
+    print(
+        f"train+valid sequences interactions num: {ins}, select num: {ss}, qs: {qs}, cs: {cs}, seqnum: {seqnum}")
+    split_seqs.to_csv(os.path.join(
+        dname, "train_valid_sequences.csv"), index=None)
+    # print(f"split seqs dtypes: {split_seqs.dtypes}")
 
-    split_seqs = generate_sequences(splitdf, effective_keys, min_seq_len, maxlen)
-    ins, ss, qs, cs, seqnum = calStatistics(split_seqs, stares, "train+valid sequences")
-    print(f"train+valid sequences interactions num: {ins}, select num: {ss}, qs: {qs}, cs: {cs}, seqnum: {seqnum}")
-    split_seqs.to_csv(os.path.join(dname, "train_valid_sequences.csv"), index=None)
-
-    # add default fold -1 to test
-    test_df = copy.deepcopy(test_df)
+    # add default fold -1 to test!
     test_df["fold"] = [-1] * test_df.shape[0]
-    test_df["cidxs"] = get_inter_qidx(test_df)
-
-    test_seqs = generate_sequences(test_df, list(effective_keys) + ["cidxs"], min_seq_len, maxlen)
+    test_df['cidxs'] = get_inter_qidx(test_df)  # add index
+    test_seqs = generate_sequences(test_df, list(
+        effective_keys) + ['cidxs'], min_seq_len, maxlen)
     ins, ss, qs, cs, seqnum = calStatistics(test_df, stares, "test original")
-    print(f"original test interactions num: {ins}, select num: {ss}, qs: {qs}, cs: {cs}, seqnum: {seqnum}")
-    ins, ss, qs, cs, seqnum = calStatistics(test_seqs, stares, "test sequences")
-    print(f"test sequences interactions num: {ins}, select num: {ss}, qs: {qs}, cs: {cs}, seqnum: {seqnum}")
-    print("=" * 20)
+    print(
+        f"original test interactions num: {ins}, select num: {ss}, qs: {qs}, cs: {cs}, seqnum: {seqnum}")
+    ins, ss, qs, cs, seqnum = calStatistics(
+        test_seqs, stares, "test sequences")
+    print(
+        f"test sequences interactions num: {ins}, select num: {ss}, qs: {qs}, cs: {cs}, seqnum: {seqnum}")
+    print("="*20)
 
-    test_window_seqs = generate_window_sequences(test_df, list(effective_keys) + ["cidxs"], maxlen)
-    flag, test_question_seqs = generate_question_sequences(test_df, effective_keys, False, min_seq_len, maxlen)
-    flag, test_question_window_seqs = generate_question_sequences(test_df, effective_keys, True, min_seq_len, maxlen)
+    test_window_seqs = generate_window_sequences(
+        test_df, list(effective_keys) + ['cidxs'], maxlen)
+    flag, test_question_seqs = generate_question_sequences(
+        test_df, effective_keys, False, min_seq_len, maxlen)
+    flag, test_question_window_seqs = generate_question_sequences(
+        test_df, effective_keys, True, min_seq_len, maxlen)
 
-    test_df = test_df[config + ["cidxs"]]
+    test_df = test_df[config+['cidxs']]
 
     test_df.to_csv(os.path.join(dname, "test.csv"), index=None)
     test_seqs.to_csv(os.path.join(dname, "test_sequences.csv"), index=None)
-    test_window_seqs.to_csv(os.path.join(dname, "test_window_sequences.csv"), index=None)
+    test_window_seqs.to_csv(os.path.join(
+        dname, "test_window_sequences.csv"), index=None)
 
-    ins, ss, qs, cs, seqnum = calStatistics(test_window_seqs, stares, "test window")
-    print(f"test window interactions num: {ins}, select num: {ss}, qs: {qs}, cs: {cs}, seqnum: {seqnum}")
+    ins, ss, qs, cs, seqnum = calStatistics(
+        test_window_seqs, stares, "test window")
+    print(
+        f"test window interactions num: {ins}, select num: {ss}, qs: {qs}, cs: {cs}, seqnum: {seqnum}")
 
     if flag:
-        test_question_seqs.to_csv(os.path.join(dname, "test_question_sequences.csv"), index=None)
-        test_question_window_seqs.to_csv(os.path.join(dname, "test_question_window_sequences.csv"), index=None)
+        test_question_seqs.to_csv(os.path.join(
+            dname, "test_question_sequences.csv"), index=None)
+        test_question_window_seqs.to_csv(os.path.join(
+            dname, "test_question_window_sequences.csv"), index=None)
 
-        ins, ss, qs, cs, seqnum = calStatistics(test_question_seqs, stares, "test question")
-        print(f"test question interactions num: {ins}, select num: {ss}, qs: {qs}, cs: {cs}, seqnum: {seqnum}")
-        ins, ss, qs, cs, seqnum = calStatistics(test_question_window_seqs, stares, "test question window")
-        print(f"test question window interactions num: {ins}, select num: {ss}, qs: {qs}, cs: {cs}, seqnum: {seqnum}")
+        ins, ss, qs, cs, seqnum = calStatistics(
+            test_question_seqs, stares, "test question")
+        print(
+            f"test question interactions num: {ins}, select num: {ss}, qs: {qs}, cs: {cs}, seqnum: {seqnum}")
+        ins, ss, qs, cs, seqnum = calStatistics(
+            test_question_window_seqs, stares, "test question window")
+        print(
+            f"test question window interactions num: {ins}, select num: {ss}, qs: {qs}, cs: {cs}, seqnum: {seqnum}")
 
+    other_config = {}
+    if dataset_name in ["dbe_kt22", "dbe_kt22_tree"]:
+        other_config["kc_tree_path"] = os.path.join(
+            dname, "2_DBE_KT22_datafiles_100102_csv", "kc_knowledge_tree_original.json"
+        )
+    elif dataset_name == "xes3g5m_tree":
+        other_config["kc_tree_path"] = os.path.join(
+            dname, "metadata", "kc_knowledge_tree_original.json"
+        )
     write_config(
         dataset_name=dataset_name,
         dkeyid2idx=dkeyid2idx,
@@ -1188,14 +772,7 @@ def main(dname, fname, dataset_name, configf, min_seq_len=3, maxlen=200, kfold=5
         maxlen=maxlen,
         flag=flag,
         other_config=other_config,
-        keyid2idx_tree=keyid2idx_tree,
     )
 
-    print("=" * 20)
-    if is_tree_dataset:
-        print("Tree artifacts written:")
-        print(f"  {os.path.join(dname, 'keyid2idx_tree.json')}")
-        print(f"  {os.path.join(dname, 'tree_parent_index.json')}")
-        print(f"  {os.path.join(dname, 'tree_node_index.json')}")
-        print(f"  {os.path.join(dname, 'tree_mapping_report.json')}")
+    print("="*20)
     print("\n".join(stares))
