@@ -15,10 +15,12 @@ if __name__ == "__main__":
     parser.add_argument("--dim_s", type=int, default=200)
     parser.add_argument("--learning_rate", type=float, default=1e-3)
     parser.add_argument("--size_m", type=int, default=50)
+    parser.add_argument("--dkvmn_use_question", type=int, default=0)
    
     parser.add_argument("--use_wandb", type=int, default=1)
     parser.add_argument("--add_uuid", type=int, default=1)
     args = parser.parse_args()
 
     params = vars(args)
+    params["dkvmn_use_question"] = bool(int(params["dkvmn_use_question"]))
     main(params)

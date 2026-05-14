@@ -95,7 +95,7 @@ def main(params):
 
     save_config(train_config, model_config, data_config[dataset_name], params, ckpt_path)
     learning_rate = params["learning_rate"]
-    for remove_item in ['use_wandb','learning_rate','add_uuid','l2']:
+    for remove_item in ['use_wandb','learning_rate','add_uuid','l2','tree_pred_decay_lr_mult']:
         if remove_item in model_config:
             del model_config[remove_item]
     if model_name in ["saint","saint++", "sakt", "atdkt", "simplekt","stablekt", "datakt","folibikt"]:
@@ -122,10 +122,39 @@ def main(params):
     elif model_name == "dimkt":
         opt = torch.optim.Adam(model.parameters(),lr=learning_rate,weight_decay=params['weight_decay'])
     else:
-        if optimizer == "sgd":
-            opt = SGD(model.parameters(), learning_rate, momentum=0.9)
-        elif optimizer == "adam":
-            opt = Adam(model.parameters(), learning_rate)
+        if (
+            model_name == "dkt"
+            and getattr(model, "emb_type", "") == "qid_tree"
+            and hasattr(model, "tree_pred_fusion_depth_decay_logit")
+        ):
+            decay_lr_mult = float(params.get("tree_pred_decay_lr_mult", 20.0))
+            if decay_lr_mult <= 0:
+                raise ValueError("tree_pred_decay_lr_mult must be > 0.")
+            decay_param = model.tree_pred_fusion_depth_decay_logit
+            decay_param_id = id(decay_param)
+            base_params = [
+                p for p in model.parameters()
+                if p.requires_grad and id(p) != decay_param_id
+            ]
+            param_groups = [
+                {"params": base_params, "lr": learning_rate},
+                {"params": [decay_param], "lr": learning_rate * decay_lr_mult},
+            ]
+            if optimizer == "sgd":
+                opt = SGD(param_groups, momentum=0.9)
+            elif optimizer == "adam":
+                opt = Adam(param_groups)
+            print(
+                "[qid_tree_decay_debug:optimizer] "
+                f"base_lr={learning_rate}, "
+                f"decay_lr_mult={decay_lr_mult}, "
+                f"decay_lr={learning_rate * decay_lr_mult}"
+            )
+        else:
+            if optimizer == "sgd":
+                opt = SGD(model.parameters(), learning_rate, momentum=0.9)
+            elif optimizer == "adam":
+                opt = Adam(model.parameters(), learning_rate)
    
     testauc, testacc = -1, -1
     window_testauc, window_testacc = -1, -1

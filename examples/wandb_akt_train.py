@@ -20,8 +20,27 @@ if __name__ == "__main__":
 
     parser.add_argument("--use_wandb", type=int, default=1)
     parser.add_argument("--add_uuid", type=int, default=1)
+
+    # qid_tree controls for AKT (all optional; defaults keep current behavior).
+    parser.add_argument("--tree_embed_mode", type=str, default="independent")
+    parser.add_argument("--tree_aux_loss_weight", type=float, default=0.0)
+    parser.add_argument("--tree_aux_loss_mode", type=str, default="direct")
+    parser.add_argument("--tree_aux_max_depth", type=int, default=1)
+    parser.add_argument("--tree_aux_depths", type=str, default="")
+    parser.add_argument("--tree_pred_fusion_mode", type=str, default="none")
+    parser.add_argument("--tree_pred_fusion_weight", type=float, default=0.5)
+    parser.add_argument("--tree_pred_max_depth", type=int, default=1)
+    parser.add_argument("--tree_pred_depths", type=str, default="")
+    parser.add_argument("--tree_aux_ignore_first", type=int, default=1)
+    parser.add_argument("--tree_max_ancestor_depth", type=int, default=16)
    
     args = parser.parse_args()
 
     params = vars(args)
+    # Convert empty-string depth specs into None for AKT parser.
+    if params.get("tree_aux_depths", "") == "":
+        params["tree_aux_depths"] = None
+    if params.get("tree_pred_depths", "") == "":
+        params["tree_pred_depths"] = None
+    params["tree_aux_ignore_first"] = bool(int(params["tree_aux_ignore_first"]))
     main(params)
