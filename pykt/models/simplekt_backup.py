@@ -8,7 +8,7 @@ from enum import IntEnum
 import numpy as np
 from .utils import transformer_FFN, ut_mask, pos_encode, get_clones
 from torch.nn import Module, Embedding, LSTM, Linear, Dropout, LayerNorm, TransformerEncoder, TransformerEncoderLayer, \
-        MultiLabelMarginLoss, MultiLabelSoftMarginLoss, CrossEntropyLoss, BCELoss, MultiheadAttention
+        MultiLabelMarginLoss, MultiLabelSoftMarginLoss, CrossEntropyLoss, BCELoss, MultiheadAttention, ModuleList, Parameter
 from torch.nn.functional import one_hot, cross_entropy, multilabel_margin_loss, binary_cross_entropy
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -22,7 +22,7 @@ class simpleKT(nn.Module):
     def __init__(self, n_question, n_pid, 
             d_model, n_blocks, dropout, d_ff=256, 
             loss1=0.5, loss2=0.5, loss3=0.5, start=50, num_layers=2, nheads=4, seq_len=200, 
-            kq_same=1, final_fc_dim=512, final_fc_dim2=256, num_attn_heads=8, separate_qa=False, l2=1e-5, emb_type="qid", emb_path="", pretrain_dim=768):
+            kq_same=1, final_fc_dim=512, final_fc_dim2=256, num_attn_heads=8, separate_qa=False, l2=1e-5, emb_type="qid", emb_path="", pretrain_dim=768, num_c_fmkc=None):
         super().__init__()
         """
         Input:
@@ -43,16 +43,43 @@ class simpleKT(nn.Module):
         self.separate_qa = separate_qa
         self.emb_type = emb_type
         embed_l = d_model
+        if emb_type == "qid_fmkc":
+            if num_c_fmkc is None or len(num_c_fmkc) < 1:
+                raise ValueError("emb_type qid_fmkc requires num_c_fmkc")
+            self.num_c_fmkc = [int(n) for n in num_c_fmkc]
+            self.num_fmkc_fields = len(self.num_c_fmkc)
         if self.n_pid > 0:
             if emb_type.find("scalar") != -1:
                 # print(f"question_difficulty is scalar")
                 self.difficult_param = nn.Embedding(self.n_pid+1, 1) # 题目难度
             else:
                 self.difficult_param = nn.Embedding(self.n_pid+1, embed_l) # 题目难度
-            self.q_embed_diff = nn.Embedding(self.n_question+1, embed_l) # question emb, 总结了包含当前question（concept）的problems（questions）的变化
-            self.qa_embed_diff = nn.Embedding(2 * self.n_question + 1, embed_l) # interaction emb, 同上
+            if emb_type == "qid_fmkc":
+                self.q_embed_diff_fmkc = ModuleList(
+                    [Embedding(n, embed_l) for n in self.num_c_fmkc]
+                )
+                self.alpha_qdiff_fm1 = Parameter(torch.ones(self.num_fmkc_fields, embed_l))
+                self.qdiff_fm2_scale = Parameter(torch.tensor(0.1))
+                self.qdiff_fm_out_scale = Parameter(torch.tensor(1.0))
+                self.qa_embed_diff = nn.Embedding(2, embed_l)
+            else:
+                self.q_embed_diff = nn.Embedding(self.n_question+1, embed_l) # question emb, 总结了包含当前question（concept）的problems（questions）的变化
+                self.qa_embed_diff = nn.Embedding(2 * self.n_question + 1, embed_l) # interaction emb, 同上
         
-        if emb_type.startswith("qid"):
+        if emb_type == "qid_fmkc":
+            self.q_embed_fmkc = ModuleList(
+                [Embedding(n, embed_l) for n in self.num_c_fmkc]
+            )
+            self.qa_embed_fmkc = ModuleList(
+                [Embedding(n * 2, embed_l) for n in self.num_c_fmkc]
+            )
+            self.alpha_fm1 = Parameter(torch.ones(self.num_fmkc_fields, embed_l))
+            self.alpha_qa_fm1 = Parameter(torch.ones(self.num_fmkc_fields, embed_l))
+            self.fm2_scale = Parameter(torch.tensor(0.1))
+            self.fm_out_scale = Parameter(torch.tensor(1.0))
+            self.qa_fm2_scale = Parameter(torch.tensor(0.1))
+            self.qa_fm_out_scale = Parameter(torch.tensor(1.0))
+        elif emb_type.startswith("qid"):
             # n_question+1 ,d_model
             self.q_embed = nn.Embedding(self.n_question, embed_l)
             if self.separate_qa: 
@@ -75,18 +102,98 @@ class simpleKT(nn.Module):
 
     def reset(self):
         for p in self.parameters():
-            if p.size(0) == self.n_pid+1 and self.n_pid > 0:
+            if p.dim() > 0 and p.size(0) == self.n_pid+1 and self.n_pid > 0:
                 torch.nn.init.constant_(p, 0.)
 
     def base_emb(self, q_data, target):
-        q_embed_data = self.q_embed(q_data)  # BS, seqlen,  d_model# c_ct
-        if self.separate_qa:
-            qa_data = q_data + self.n_question * target
-            qa_embed_data = self.qa_embed(qa_data)
+        if self.emb_type == "qid_fmkc":
+            q_embed_data = self.fm_kc_embed(q_data)
+            qa_embed_data = self.fm_kcr_embed(q_data, target)
         else:
-            # BS, seqlen, d_model # c_ct+ g_rt =e_(ct,rt)
-            qa_embed_data = self.qa_embed(target)+q_embed_data
+            q_embed_data = self.q_embed(q_data)  # BS, seqlen,  d_model# c_ct
+            if self.separate_qa:
+                qa_data = q_data + self.n_question * target
+                qa_embed_data = self.qa_embed(qa_data)
+            else:
+                # BS, seqlen, d_model # c_ct+ g_rt =e_(ct,rt)
+                qa_embed_data = self.qa_embed(target)+q_embed_data
         return q_embed_data, qa_embed_data
+
+    def _check_fmkc_shape(self, c_multi):
+        if c_multi.dim() != 3:
+            raise ValueError(
+                f"qid_fmkc expects q shape [B, L, F], got {tuple(c_multi.shape)}"
+            )
+        if c_multi.size(-1) != self.num_fmkc_fields:
+            raise ValueError(
+                f"Expected {self.num_fmkc_fields} KC fields, got {c_multi.size(-1)}"
+            )
+
+    def _fm_embed(self, c_multi, emb_tables, alpha, fm2_scale, fm_out_scale, r=None):
+        self._check_fmkc_shape(c_multi)
+        c_multi = c_multi.long()
+        field_valid_bool = c_multi >= 0
+        if r is not None:
+            response_valid_bool = (r >= 0) & (r <= 1)
+            field_valid_bool = field_valid_bool & response_valid_bool.unsqueeze(-1)
+            ri = r.long().clamp(0, 1)
+        else:
+            ri = None
+        field_valid = field_valid_bool.float()
+        safe_ids = c_multi.clamp(min=0)
+        embs = []
+        for i in range(self.num_fmkc_fields):
+            ids_i = safe_ids[..., i]
+            if r is not None:
+                ids_i = ids_i + self.num_c_fmkc[i] * ri
+            e_i = emb_tables[i](ids_i)
+            e_i = e_i * field_valid[..., i].unsqueeze(-1)
+            embs.append(e_i)
+        es = torch.stack(embs, dim=2)  # [B, L, F, D]
+        valid_count = field_valid.sum(dim=-1, keepdim=True)
+        valid_count_safe = valid_count.clamp(min=1.0)
+        token_valid = (valid_count > 0).float()
+        alpha = alpha.view(1, 1, self.num_fmkc_fields, es.size(-1))
+        first = (alpha * es).sum(dim=2) / torch.sqrt(valid_count_safe)
+        s = es.sum(dim=2)
+        sum_sq = (es * es).sum(dim=2)
+        fm2 = 0.5 * (s * s - sum_sq)
+        pair_count = valid_count_safe * (valid_count_safe - 1.0) / 2.0
+        pair_count_safe = pair_count.clamp(min=1.0)
+        fm2 = fm2 / torch.sqrt(pair_count_safe)
+        out = fm_out_scale * (first + fm2_scale * fm2)
+        out = out * token_valid
+        return out
+
+    def fm_kc_embed(self, c_multi):
+        return self._fm_embed(
+            c_multi=c_multi,
+            emb_tables=self.q_embed_fmkc,
+            alpha=self.alpha_fm1,
+            fm2_scale=self.fm2_scale,
+            fm_out_scale=self.fm_out_scale,
+            r=None,
+        )
+
+    def fm_kcr_embed(self, c_multi, r):
+        return self._fm_embed(
+            c_multi=c_multi,
+            emb_tables=self.qa_embed_fmkc,
+            alpha=self.alpha_qa_fm1,
+            fm2_scale=self.qa_fm2_scale,
+            fm_out_scale=self.qa_fm_out_scale,
+            r=r,
+        )
+
+    def fm_qdiff_embed(self, c_multi):
+        return self._fm_embed(
+            c_multi=c_multi,
+            emb_tables=self.q_embed_diff_fmkc,
+            alpha=self.alpha_qdiff_fm1,
+            fm2_scale=self.qdiff_fm2_scale,
+            fm_out_scale=self.qdiff_fm_out_scale,
+            r=None,
+        )
 
     def get_attn_pad_mask(self, sm):
         batch_size, l = sm.size()
@@ -108,13 +215,19 @@ class simpleKT(nn.Module):
             q_embed_data, qa_embed_data = self.base_emb(q_data, target)
         if self.n_pid > 0 and emb_type.find("norasch") == -1: # have problem id
             if emb_type.find("aktrasch") == -1:
-                q_embed_diff_data = self.q_embed_diff(q_data)  # d_ct 总结了包含当前question（concept）的problems（questions）的变化
+                if emb_type == "qid_fmkc":
+                    q_embed_diff_data = self.fm_qdiff_embed(q_data)
+                else:
+                    q_embed_diff_data = self.q_embed_diff(q_data)  # d_ct 总结了包含当前question（concept）的problems（questions）的变化
                 pid_embed_data = self.difficult_param(pid_data)  # uq 当前problem的难度
                 q_embed_data = q_embed_data + pid_embed_data * \
                     q_embed_diff_data  # uq *d_ct + c_ct # question encoder
 
             else:
-                q_embed_diff_data = self.q_embed_diff(q_data)  # d_ct 总结了包含当前question（concept）的problems（questions）的变化
+                if emb_type == "qid_fmkc":
+                    q_embed_diff_data = self.fm_qdiff_embed(q_data)
+                else:
+                    q_embed_diff_data = self.q_embed_diff(q_data)  # d_ct 总结了包含当前question（concept）的problems（questions）的变化
                 pid_embed_data = self.difficult_param(pid_data)  # uq 当前problem的难度
                 q_embed_data = q_embed_data + pid_embed_data * \
                     q_embed_diff_data  # uq *d_ct + c_ct # question encoder
@@ -128,7 +241,7 @@ class simpleKT(nn.Module):
         # Pass to the decoder
         # output shape BS,seqlen,d_model or d_model//2
         y2, y3 = 0, 0
-        if emb_type in ["qid", "qidaktrasch", "qid_scalar", "qid_norasch"]:
+        if emb_type in ["qid", "qidaktrasch", "qid_scalar", "qid_norasch", "qid_fmkc"]:
             d_output = self.model(q_embed_data, qa_embed_data)
 
             concat_q = torch.cat([d_output, q_embed_data], dim=-1)

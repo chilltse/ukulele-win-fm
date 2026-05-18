@@ -632,7 +632,7 @@ def get_max_concepts(df):
     return max_concepts
 
 
-def main(dname, fname, dataset_name, configf, min_seq_len=3, maxlen=200, kfold=5):
+def main(dname, fname, dataset_name, configf, min_seq_len=3, maxlen=200, kfold=5, window=False):
     """split main function
 
     Args:
@@ -718,39 +718,47 @@ def main(dname, fname, dataset_name, configf, min_seq_len=3, maxlen=200, kfold=5
         f"test sequences interactions num: {ins}, select num: {ss}, qs: {qs}, cs: {cs}, seqnum: {seqnum}")
     print("="*20)
 
-    test_window_seqs = generate_window_sequences(
-        test_df, list(effective_keys) + ['cidxs'], maxlen)
+    test_window_seqs = None
+    if window:
+        test_window_seqs = generate_window_sequences(
+            test_df, list(effective_keys) + ['cidxs'], maxlen)
     flag, test_question_seqs = generate_question_sequences(
         test_df, effective_keys, False, min_seq_len, maxlen)
-    flag, test_question_window_seqs = generate_question_sequences(
-        test_df, effective_keys, True, min_seq_len, maxlen)
+    test_question_window_seqs = None
+    if window:
+        flag, test_question_window_seqs = generate_question_sequences(
+            test_df, effective_keys, True, min_seq_len, maxlen)
 
     test_df = test_df[config+['cidxs']]
 
     test_df.to_csv(os.path.join(dname, "test.csv"), index=None)
     test_seqs.to_csv(os.path.join(dname, "test_sequences.csv"), index=None)
-    test_window_seqs.to_csv(os.path.join(
-        dname, "test_window_sequences.csv"), index=None)
+    if window and test_window_seqs is not None:
+        test_window_seqs.to_csv(os.path.join(
+            dname, "test_window_sequences.csv"), index=None)
 
-    ins, ss, qs, cs, seqnum = calStatistics(
-        test_window_seqs, stares, "test window")
-    print(
-        f"test window interactions num: {ins}, select num: {ss}, qs: {qs}, cs: {cs}, seqnum: {seqnum}")
+    if window and test_window_seqs is not None:
+        ins, ss, qs, cs, seqnum = calStatistics(
+            test_window_seqs, stares, "test window")
+        print(
+            f"test window interactions num: {ins}, select num: {ss}, qs: {qs}, cs: {cs}, seqnum: {seqnum}")
 
     if flag:
         test_question_seqs.to_csv(os.path.join(
             dname, "test_question_sequences.csv"), index=None)
-        test_question_window_seqs.to_csv(os.path.join(
-            dname, "test_question_window_sequences.csv"), index=None)
+        if window and test_question_window_seqs is not None:
+            test_question_window_seqs.to_csv(os.path.join(
+                dname, "test_question_window_sequences.csv"), index=None)
 
         ins, ss, qs, cs, seqnum = calStatistics(
             test_question_seqs, stares, "test question")
         print(
             f"test question interactions num: {ins}, select num: {ss}, qs: {qs}, cs: {cs}, seqnum: {seqnum}")
-        ins, ss, qs, cs, seqnum = calStatistics(
-            test_question_window_seqs, stares, "test question window")
-        print(
-            f"test question window interactions num: {ins}, select num: {ss}, qs: {qs}, cs: {cs}, seqnum: {seqnum}")
+        if window and test_question_window_seqs is not None:
+            ins, ss, qs, cs, seqnum = calStatistics(
+                test_question_window_seqs, stares, "test question window")
+            print(
+                f"test question window interactions num: {ins}, select num: {ss}, qs: {qs}, cs: {cs}, seqnum: {seqnum}")
 
     other_config = {}
     if dataset_name in ["dbe_kt22", "dbe_kt22_tree"]:
@@ -761,6 +769,9 @@ def main(dname, fname, dataset_name, configf, min_seq_len=3, maxlen=200, kfold=5
         other_config["kc_tree_path"] = os.path.join(
             dname, "metadata", "kc_knowledge_tree_original.json"
         )
+    if not window:
+        other_config["test_window_file"] = ""
+        other_config["test_question_window_file"] = ""
     write_config(
         dataset_name=dataset_name,
         dkeyid2idx=dkeyid2idx,

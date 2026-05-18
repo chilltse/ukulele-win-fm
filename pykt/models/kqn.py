@@ -51,8 +51,8 @@ class KQN(nn.Module):
         self.drop_layer = nn.Dropout(dropout)
         self.sigmoid = nn.Sigmoid()
         # self.loss_fn = nn.BCEWithLogitsLoss(reduction='mean')
-        self.two_eye = torch.eye(2*n_skills)
-        self.eye = torch.eye(n_skills)
+        self.register_buffer("two_eye", torch.eye(2 * n_skills))
+        self.register_buffer("eye", torch.eye(n_skills))
 
     
     def init_hidden(self, batch_size: int):
@@ -65,6 +65,10 @@ class KQN(nn.Module):
     
     
     def forward(self, q, r, qshft, qtest=False):
+        # Keep index tensors on the same device as buffers.
+        q = q.to(self.two_eye.device)
+        r = r.to(self.two_eye.device)
+        qshft = qshft.to(self.eye.device)
         in_data = self.two_eye[r * self.num_c + q]
         next_skills = self.eye[qshft]
         # print(f"q: {q.tolist()}, r: {r.tolist()}")
@@ -74,8 +78,8 @@ class KQN(nn.Module):
         emb_type = self.emb_type
         # print(f"in_data: {in_data.shape}")
         if emb_type == "qid":
-            encoded_knowledge = self.encode_knowledge(in_data.to(device)) # (batch_size, max_seq_len, n_hidden)
-        encoded_skills = self.encode_skills(next_skills.to(device)) # (batch_size, max_seq_len, n_hidden)
+            encoded_knowledge = self.encode_knowledge(in_data) # (batch_size, max_seq_len, n_hidden)
+        encoded_skills = self.encode_skills(next_skills) # (batch_size, max_seq_len, n_hidden)
         encoded_knowledge = self.drop_layer(encoded_knowledge)
         
         # query the knowledge state with respect to the encoded skills

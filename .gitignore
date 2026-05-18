@@ -11,7 +11,10 @@ data/xes3g5m
 data/eedi
 data/xes3g5m_tree
 data/dbe_kt22
-data/dbe_kt22_tree
+data/dbe_kt22*/
+data/xes3g5m*/
+data/xes3g5m*/
+data/bepkt*/
 dist/
 data/yousician/**/*.json
 data/yousician/**/*.csv

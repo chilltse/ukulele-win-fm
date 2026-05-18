@@ -213,7 +213,7 @@ def model_forward(model, data, rel=None):
                 raise ValueError("qid_fmkc requires concepts_dense in dataset as q_dense.")
             y = model(cc.long(), cr.long(), ccd.long())[:, 1:]
         else:
-            y = model(c.long(), r.long(), None)
+            y = model(c.long(), r.long())
             y = (y * one_hot(cshft.long(), model.num_c)).sum(-1)
         if getattr(model, "emb_type", "") != "qid_tree":
             ys.append(y)

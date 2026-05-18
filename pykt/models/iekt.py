@@ -124,7 +124,7 @@ class IEKT(QueBaseModel):
         seq_len = data_new['cc'].shape[1]
 
         #以下是强化学习部分内容
-        seq_num = torch.where(data['qseqs']!=0,1,0).sum(axis=-1)+1
+        seq_num = (torch.where(data['qseqs'] != 0, 1, 0).sum(axis=-1) + 1).to(self.device)
         emb_action_tensor = torch.stack(emb_action_list, dim = 1)
         p_action_tensor = torch.stack(p_action_list, dim = 1)
         state_tensor = torch.stack(states_list, dim = 1)
@@ -201,6 +201,9 @@ class IEKT(QueBaseModel):
     def predict_one_step(self,data,return_details=False,process=True):
         sigmoid_func = torch.nn.Sigmoid()
         data_new = self.batch_to_device(data,process)
+        for key, value in data_new.items():
+            if torch.is_tensor(value):
+                data_new[key] = value.to(self.device)
         
         data_len = data_new['cc'].shape[0]
         seq_len = data_new['cc'].shape[1]

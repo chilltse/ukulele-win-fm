@@ -43,16 +43,20 @@ device = "cpu" if not torch.cuda.is_available() else "cuda"
 def init_model(model_name, model_config, data_config, emb_type):
     tree_num_c = data_config.get("num_c_tree", data_config["num_c"])
     if model_name == "dkt":
-        dkt_kw = {
-            "emb_type": emb_type,
-            "emb_path": data_config["emb_path"],
-            "dpath": data_config.get("dpath", ""),
-            "kc_tree_path": data_config.get("kc_tree_path", ""),
+        if emb_type != "qid":
+            raise ValueError(
+                f"Simple DKT only supports emb_type='qid', but got emb_type='{emb_type}'."
+            )
+        allowed_dkt_cfg = {"emb_size", "dropout", "pretrain_dim"}
+        dkt_model_config = {
+            k: v for k, v in model_config.items() if k in allowed_dkt_cfg
         }
-        if emb_type == "qid_fmkc":
-            dkt_kw["num_c_fmkc"] = data_config["num_c_fmkc"]
-        dkt_num_c = tree_num_c if emb_type == "qid_tree" else data_config["num_c"]
-        model = DKT(dkt_num_c, **model_config, **dkt_kw).to(device)
+        model = DKT(
+            data_config["num_c"],
+            emb_type="qid",
+            emb_path=data_config.get("emb_path", ""),
+            **dkt_model_config,
+        ).to(device)
     elif model_name == "dkt+":
         dktplus_kw = {"emb_type": emb_type, "emb_path": data_config["emb_path"]}
         if emb_type == "qid_fmkc":
@@ -83,14 +87,11 @@ def init_model(model_name, model_config, data_config, emb_type):
         akt_kw = {
             "emb_type": emb_type,
             "emb_path": data_config["emb_path"],
-            "dpath": data_config.get("dpath", ""),
-            "kc_tree_path": data_config.get("kc_tree_path", ""),
         }
         if emb_type == "qid_fmkc":
             akt_kw["num_c_fmkc"] = data_config["num_c_fmkc"]
-        akt_num_c = tree_num_c if emb_type == "qid_tree" else data_config["num_c"]
         model = AKT(
-            akt_num_c,
+            data_config["num_c"],
             data_config["num_q"],
             **model_config,
             **akt_kw,

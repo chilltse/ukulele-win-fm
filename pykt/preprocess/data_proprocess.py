@@ -1144,7 +1144,7 @@ def main(dname, fname, dataset_name, configf, min_seq_len=3, maxlen=200, kfold=5
     print("\n".join(stares))
 
 
-def process_raw_data(dataset_name, dname2paths):
+def process_raw_data(dataset_name, dname2paths, rollup_node_ids=None):
     """Convert raw source file to pyKT 6-line `data.txt`, return (dname, write_file)."""
     is_tree_dataset = dataset_name.endswith("_tree")
     base_dataset = dataset_name[:-5] if is_tree_dataset else dataset_name
@@ -1162,6 +1162,30 @@ def process_raw_data(dataset_name, dname2paths):
 
     read_file = dname2paths[src_key]
     dname = os.path.dirname(dname2paths.get(dataset_name, read_file))
+    # For xes3g5m-family, keep reading from question_level source files
+    # but write generated artifacts to dataset root directory.
+    if base_dataset in {"xes3g5m", "xes3g5m_tree_manual_split", "xes3g5m_tree_split_v1", "xes3g5m_tree_split_v2"}:
+        norm_read = os.path.normpath(read_file)
+        expected_suffix = os.path.normpath(
+            os.path.join("question_level", "train_valid_sequences_quelevel.csv")
+        )
+        if norm_read.endswith(expected_suffix):
+            dname = os.path.dirname(os.path.dirname(norm_read))
+
+    # If roll-up is enabled, write to a new dataset variant folder.
+    if base_dataset in {"xes3g5m", "xes3g5m_tree_manual_split", "xes3g5m_tree_split_v1", "xes3g5m_tree_split_v2"} and rollup_node_ids:
+        if isinstance(rollup_node_ids, str):
+            rollup_suffix = "_".join(
+                [x.strip() for x in rollup_node_ids.split(",") if x.strip()]
+            )
+        elif isinstance(rollup_node_ids, (list, tuple, set)):
+            rollup_suffix = "_".join([str(x).strip() for x in rollup_node_ids])
+        else:
+            rollup_suffix = str(rollup_node_ids).strip()
+
+        old_dname = dname
+        dname = f"{old_dname}_rollup_{rollup_suffix}"
+        os.makedirs(dname, exist_ok=True)
     write_file = os.path.join(dname, "data.txt")
 
     if base_dataset == "assist2017":
@@ -1194,9 +1218,15 @@ def process_raw_data(dataset_name, dname2paths):
     elif base_dataset == "slepemapy":
         from .slepemapy_preprocess import read_data_from_csv
         read_data_from_csv(read_file, write_file)
-    elif base_dataset == "xes3g5m":
+    elif base_dataset in {"xes3g5m", "xes3g5m_tree_manual_split", "xes3g5m_tree_split_v1", "xes3g5m_tree_split_v2"}:
         from .xes3g5m_preprocess import read_data_from_csv
-        read_data_from_csv(read_file, write_file)
+        read_data_from_csv(
+            read_file,
+            write_file,
+            rollup_node_ids=rollup_node_ids,
+            output_dataset_dir=dname if rollup_node_ids else None,
+        )
+        # read_data_from_csv(read_file, write_file, rollup_node_ids=rollup_node_ids)
     elif base_dataset == "junyi2015":
         from .junyi2015_preprocess import read_data_from_csv, load_q2c
         dq2c = load_q2c(os.path.join(dname, "junyi_Exercise_table.csv"))

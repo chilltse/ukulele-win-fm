@@ -121,7 +121,7 @@ def id_mapping_que(df):
     finaldf = pd.DataFrame(dres)
     return finaldf, dkeyid2idx
 
-def main(dname, fname, dataset_name, configf, min_seq_len = 3, maxlen = 200, kfold = 5):
+def main(dname, fname, dataset_name, configf, min_seq_len = 3, maxlen = 200, kfold = 5, window = False):
     """split main function
 
     Args:
@@ -191,23 +191,27 @@ def main(dname, fname, dataset_name, configf, min_seq_len = 3, maxlen = 200, kfo
     print(f"test sequences interactions num: {ins}, select num: {ss}, qs: {qs}, cs: {cs}, seqnum: {seqnum}")
     print("="*20)
 
-    test_window_seqs = generate_window_sequences(test_df, list(effective_keys), maxlen)
+    test_window_seqs = None
+    if window:
+        test_window_seqs = generate_window_sequences(test_df, list(effective_keys), maxlen)
 
     
     test_df = test_df[df_save_keys]
     test_df.to_csv(os.path.join(dname, "test_quelevel.csv"), index=None)
     test_seqs.to_csv(os.path.join(dname, "test_sequences_quelevel.csv"), index=None)
-    test_window_seqs.to_csv(os.path.join(dname, "test_window_sequences_quelevel.csv"), index=None)
+    if window and test_window_seqs is not None:
+        test_window_seqs.to_csv(os.path.join(dname, "test_window_sequences_quelevel.csv"), index=None)
 
-    ins, ss, qs, cs, seqnum = calStatistics(test_window_seqs, stares, "test window question level")
-    print(f"test window interactions num: {ins}, select num: {ss}, qs: {qs}, cs: {cs}, seqnum: {seqnum}")
+    if window and test_window_seqs is not None:
+        ins, ss, qs, cs, seqnum = calStatistics(test_window_seqs, stares, "test window question level")
+        print(f"test window interactions num: {ins}, select num: {ss}, qs: {qs}, cs: {cs}, seqnum: {seqnum}")
     
 
     other_config = {
         "train_valid_original_file_quelevel": "train_valid_quelevel.csv", 
         "train_valid_file_quelevel": "train_valid_sequences_quelevel.csv",
         "test_file_quelevel": "test_sequences_quelevel.csv",
-        "test_window_file_quelevel": "test_window_sequences_quelevel.csv",
+        "test_window_file_quelevel": "test_window_sequences_quelevel.csv" if window else "",
         "test_original_file_quelevel": "test_quelevel.csv"
     }
     

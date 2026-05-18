@@ -138,7 +138,7 @@ def evaluate(model, test_loader, model_name, rel=None, save_path=""):
                         y = (y_full * one_hot(cshft_dense.long(), model.num_c)).sum(-1)
                 else:
                     if model_name == "dkt":
-                        y = model(c.long(), r.long(), None)
+                        y = model(c.long(), r.long())
                         if getattr(model, "emb_type", "") == "qid_tree":
                             pred_all = y[:, :-1, :].clamp(1e-7, 1.0 - 1e-7)
                             target_q = c[:, 1:].long()
@@ -627,7 +627,7 @@ def evaluate_question(model, test_loader, model_name, fusion_type=["early_fusion
                         y = (y_full * one_hot(cshft_dense.long(), model.num_c)).sum(-1)
                 else:
                     if model_name == "dkt":
-                        y = model(c.long(), r.long(), None)
+                        y = model(c.long(), r.long())
                     else:
                         y = model(c.long(), r.long())
                     y = (y * one_hot(cshft.long(), model.num_c)).sum(-1)
