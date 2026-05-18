@@ -88,7 +88,10 @@ def read_cur_res(dfs, params_dir, key):
         df = df.sort_values(by=["Name"])
         for i, row in df.iterrows():
             fold, model_path = row["fold"], row["model_save_path"]
-            model_path = model_path.rstrip("/qid_model.ckpt")
+            # model_path = model_path.rstrip("/qid_model.ckpt")
+            suffix = "/qid_model.ckpt"
+            if model_path.endswith(suffix):
+                model_path = model_path[:-len(suffix)]
             dfold.setdefault(fold, dict())
             dfold[fold].setdefault(model_path, [])
             values = [row["validauc"], row["validacc"]]
@@ -167,7 +170,16 @@ def cal_res(wandb_config, project, sweep_dict, dconfig, dataset_name, model_name
                 print("extracting the best model of {} in {}".format(model_names, dataset_name))
                 model_path_fold_first = []
                 for model_path in best_model_fold_first:
-                    model_path_fold_first.append(abs_dir + "/" + model_path)
+                    # Keep relative model paths when abs_dir is empty.
+                    # Otherwise resolve to an absolute path safely.
+                    if abs_dir:
+                        if os.path.isabs(model_path):
+                            resolved_path = os.path.normpath(model_path)
+                        else:
+                            resolved_path = os.path.normpath(os.path.join(abs_dir, model_path))
+                    else:
+                        resolved_path = os.path.normpath(model_path)
+                    model_path_fold_first.append(resolved_path)
                 dconfig[model_name]["model_path_fold_first"] = model_path_fold_first
                 ftarget = os.path.join(pred_dir, "{}_{}_{}_fold_first_predict.yaml".format(dataset_name, model_name, emb_type))
                 generate_wandb(fpath, ftarget, model_path_fold_first)
