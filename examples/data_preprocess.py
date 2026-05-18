@@ -23,6 +23,9 @@ dname2paths = {
     "assist2017_tree": "../data/assist2017_tree/anonymized_full_release_competition_dataset.csv",
     "xes3g5m": "../data/xes3g5m/question_level/train_valid_sequences_quelevel.csv",
     "xes3g5m_tree": "../data/xes3g5m_tree/question_level/train_valid_sequences_quelevel.csv",
+    "xes3g5m_tree_manual_split": "../data/xes3g5m_tree_manual_split/question_level/train_valid_sequences_quelevel.csv",
+    "xes3g5m_tree_split_v1": "../data/xes3g5m_tree_split_v1/question_level/train_valid_sequences_quelevel.csv",
+    "xes3g5m_tree_split_v2": "../data/xes3g5m_tree_split_v2/question_level/train_valid_sequences_quelevel.csv",
     "nips_task34_tree": "../data/nips_task34_tree/train_task_3_4.csv",
     "junyi2015": "../data/junyi2015/junyi_ProblemLog_original.csv",
     "ednet": "../data/ednet/",
@@ -38,6 +41,12 @@ if __name__ == "__main__":
     parser.add_argument("-m","--min_seq_len", type=int, default=3)
     parser.add_argument("-l","--maxlen", type=int, default=200)
     parser.add_argument("-k","--kfold", type=int, default=5)
+    parser.add_argument("--rollup_node_ids", type=str, default=None)
+    parser.add_argument(
+        "--window",
+        action="store_true",
+        help="Enable sliding-window sequence generation for test sets.",
+    )
     # parser.add_argument("--mode", type=str, default="concept",help="question or concept")
     args = parser.parse_args()
 
@@ -47,9 +56,20 @@ if __name__ == "__main__":
     if args.dataset_name=="peiyou":
         dname2paths["peiyou"] = args.file_path
         print(f"fpath: {args.file_path}")
-    dname, writef = process_raw_data(args.dataset_name, dname2paths)
+    dname, writef = process_raw_data(
+        args.dataset_name,
+        dname2paths,
+        rollup_node_ids=args.rollup_node_ids,
+    )
+    config_dataset_name = args.dataset_name
+    if args.dataset_name in {"xes3g5m", "xes3g5m_tree"} and args.rollup_node_ids:
+        rollup_suffix = "_".join(
+            [x.strip() for x in str(args.rollup_node_ids).split(",") if x.strip()]
+        )
+        if rollup_suffix:
+            config_dataset_name = f"{args.dataset_name}_rollup_{rollup_suffix}"
     print("-"*50)
-    print(f"dname: {dname}, writef: {writef}")
+    print(f"dname: {dname}, writef: {writef}, config_dataset_name: {config_dataset_name}")
     # split
     # remove stale cached processed files across platforms
     for pkl_path in glob.glob(os.path.join(dname, "*.pkl")):
@@ -59,9 +79,27 @@ if __name__ == "__main__":
             pass
 
     #for concept level model
-    split_concept(dname, writef, args.dataset_name, configf, args.min_seq_len,args.maxlen, args.kfold)
+    split_concept(
+        dname,
+        writef,
+        config_dataset_name,
+        configf,
+        args.min_seq_len,
+        args.maxlen,
+        args.kfold,
+        args.window,
+    )
     print("="*100)
 
     #for question level model
-    split_question(dname, writef, args.dataset_name, configf, args.min_seq_len,args.maxlen, args.kfold)
+    split_question(
+        dname,
+        writef,
+        config_dataset_name,
+        configf,
+        args.min_seq_len,
+        args.maxlen,
+        args.kfold,
+        args.window,
+    )
 

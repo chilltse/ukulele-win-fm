@@ -5,7 +5,7 @@ import copy
 import torch
 import pandas as pd
 
-from pykt.models import evaluate,evaluate_question,load_model
+from pykt.models import evaluate, load_model
 from pykt.datasets import init_test_datasets
 
 device = "cpu" if not torch.cuda.is_available() else "cuda"
@@ -167,7 +167,7 @@ def main(params):
         os.environ['WANDB_API_KEY'] = wandb_config["api_key"]
         wandb.init(project="wandb_predict")
 
-    save_dir, batch_size, fusion_type = params["save_dir"], params["bz"], params["fusion_type"].split(",")
+    save_dir, batch_size = params["save_dir"], params["bz"]
 
     with open(os.path.join(save_dir, "config.json")) as fin:
         config = json.load(fin)
@@ -195,10 +195,14 @@ def main(params):
             data_config["num_at"] = config["data_config"]["num_at"]
             data_config["num_it"] = config["data_config"]["num_it"]    
     if model_name not in ["dimkt"]:        
-        test_loader, test_window_loader, test_question_loader, test_question_window_loader = init_test_datasets(data_config, model_name, batch_size)
+        test_loader, test_window_loader, test_question_loader, test_question_window_loader = init_test_datasets(
+            data_config, model_name, batch_size, load_window=False, load_question=False
+        )
     else:
         diff_level = trained_params["difficult_levels"]
-        test_loader, test_window_loader, test_question_loader, test_question_window_loader = init_test_datasets(data_config, model_name, batch_size, diff_level=diff_level)
+        test_loader, test_window_loader, test_question_loader, test_question_window_loader = init_test_datasets(
+            data_config, model_name, batch_size, diff_level=diff_level, load_window=False, load_question=False
+        )
 
     print(f"Start predicting model: {model_name}, embtype: {emb_type}, save_dir: {save_dir}, dataset_name: {dataset_name}")
     print(f"model_config: {model_config}")
@@ -208,15 +212,15 @@ def main(params):
     
     # 先持久化 DeepIRT 的 stu_ability / que_diff（仅 deep_irt 生效）
     test_uid_list = _load_uid_list(os.path.join(data_config["dpath"], data_config["test_file"]))
-    test_window_uid_list = _load_uid_list(os.path.join(data_config["dpath"], data_config["test_window_file"]))
     dump_deep_irt_factors(
         model, test_loader, model_name, save_dir, split_name="test",
         uid_list=test_uid_list, data_config=data_config
     )
-    dump_deep_irt_factors(
-        model, test_window_loader, model_name, save_dir, split_name="test_window",
-        uid_list=test_window_uid_list, data_config=data_config
-    )
+    # 为减少 predict 阶段计算成本，仅保留 test split，不再导出 test_window。
+    # dump_deep_irt_factors(
+    #     model, test_window_loader, model_name, save_dir, split_name="test_window",
+    #     uid_list=test_window_uid_list, data_config=data_config
+    # )
 
 
     save_test_path = os.path.join(save_dir, model.emb_type+"_test_predictions.txt")
@@ -240,38 +244,40 @@ def main(params):
         testauc, testacc = evaluate(model, test_loader, model_name, save_test_path)
     print(f"testauc: {testauc}, testacc: {testacc}")
 
-    window_testauc, window_testacc = -1, -1
-    save_test_window_path = os.path.join(save_dir, model.emb_type+"_test_window_predictions.txt")
-    if model.model_name == "rkt":
-        window_testauc, window_testacc = evaluate(model, test_window_loader, model_name, rel, save_test_window_path)
-    else:
-        window_testauc, window_testacc = evaluate(model, test_window_loader, model_name, save_test_window_path)
-    print(f"testauc: {testauc}, testacc: {testacc}, window_testauc: {window_testauc}, window_testacc: {window_testacc}")
+    # 为节省 test 阶段开销，注释 window 评估，只保留 testauc / testacc。
+    # window_testauc, window_testacc = -1, -1
+    # save_test_window_path = os.path.join(save_dir, model.emb_type+"_test_window_predictions.txt")
+    # if model.model_name == "rkt":
+    #     window_testauc, window_testacc = evaluate(model, test_window_loader, model_name, rel, save_test_window_path)
+    # else:
+    #     window_testauc, window_testacc = evaluate(model, test_window_loader, model_name, save_test_window_path)
+    # print(f"testauc: {testauc}, testacc: {testacc}, window_testauc: {window_testauc}, window_testacc: {window_testacc}")
 
     # question_testauc, question_testacc = -1, -1
     # question_window_testauc, question_window_testacc = -1, -1
   
     dres = {
-        "testauc": testauc, "testacc": testacc, "window_testauc": window_testauc, "window_testacc": window_testacc,
+        "testauc": testauc, "testacc": testacc,
     }  
 
-    q_testaucs, q_testaccs = -1,-1
-    qw_testaucs, qw_testaccs = -1,-1
-    if "test_question_file" in data_config and not test_question_loader is None:
-        save_test_question_path = os.path.join(save_dir, model.emb_type+"_test_question_predictions.txt")
-        q_testaucs, q_testaccs = evaluate_question(model, test_question_loader, model_name, fusion_type, save_test_question_path)
-        for key in q_testaucs:
-            dres["oriauc"+key] = q_testaucs[key]
-        for key in q_testaccs:
-            dres["oriacc"+key] = q_testaccs[key]
-            
-    if "test_question_window_file" in data_config and not test_question_window_loader is None:
-        save_test_question_window_path = os.path.join(save_dir, model.emb_type+"_test_question_window_predictions.txt")
-        qw_testaucs, qw_testaccs = evaluate_question(model, test_question_window_loader, model_name, fusion_type, save_test_question_window_path)
-        for key in qw_testaucs:
-            dres["windowauc"+key] = qw_testaucs[key]
-        for key in qw_testaccs:
-            dres["windowacc"+key] = qw_testaccs[key]
+    # 仅关注 testauc / testacc，不再计算 question 相关指标（含 window question）。
+    # q_testaucs, q_testaccs = -1,-1
+    # qw_testaucs, qw_testaccs = -1,-1
+    # if "test_question_file" in data_config and not test_question_loader is None:
+    #     save_test_question_path = os.path.join(save_dir, model.emb_type+"_test_question_predictions.txt")
+    #     q_testaucs, q_testaccs = evaluate_question(model, test_question_loader, model_name, fusion_type, save_test_question_path)
+    #     for key in q_testaucs:
+    #         dres["oriauc"+key] = q_testaucs[key]
+    #     for key in q_testaccs:
+    #         dres["oriacc"+key] = q_testaccs[key]
+    #
+    # if "test_question_window_file" in data_config and not test_question_window_loader is None:
+    #     save_test_question_window_path = os.path.join(save_dir, model.emb_type+"_test_question_window_predictions.txt")
+    #     qw_testaucs, qw_testaccs = evaluate_question(model, test_question_window_loader, model_name, fusion_type, save_test_question_window_path)
+    #     for key in qw_testaucs:
+    #         dres["windowauc"+key] = qw_testaucs[key]
+    #     for key in qw_testaccs:
+    #         dres["windowacc"+key] = qw_testaccs[key]
 
         
     # print(f"testauc: {testauc}, testacc: {testacc}, window_testauc: {window_testauc}, window_testacc: {window_testacc}")

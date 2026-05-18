@@ -1,6 +1,7 @@
 import os
 import argparse
 import json
+import hashlib
 
 import torch
 torch.set_num_threads(4) 
@@ -21,6 +22,22 @@ def save_config(train_config, model_config, data_config, params, save_dir):
     save_path = os.path.join(save_dir, "config.json")
     with open(save_path, "w") as fout:
         json.dump(d, fout)
+
+
+def build_run_dir_name(params):
+    """
+    Build a short, stable run directory name to avoid WinError 206.
+    Keep a small human-readable prefix, and use hash for full uniqueness.
+    """
+    dataset_name = str(params.get("dataset_name", "dataset"))
+    model_name = str(params.get("model_name", "model"))
+    emb_type = str(params.get("emb_type", "emb"))
+    fold = params.get("fold", "na")
+    seed = params.get("seed", "na")
+
+    payload = json.dumps(params, sort_keys=True, ensure_ascii=True, default=str)
+    digest = hashlib.md5(payload.encode("utf-8")).hexdigest()[:10]
+    return f"{dataset_name}_{model_name}_{emb_type}_f{fold}_s{seed}_{digest}"
 
 def main(params):
     if "use_wandb" not in params:
@@ -76,13 +93,12 @@ def main(params):
         train_loader, valid_loader, *_ = init_dataset4train(dataset_name, model_name, data_config, fold, batch_size, diff_level=diff_level)
 
     params_str = "_".join([str(v) for k,v in params.items() if not k in ['other_config']])
-
-    print(f"params: {params}, params_str: {params_str}")
+    run_dir_name = build_run_dir_name(params)
+    print(f"params: {params}, params_str: {params_str}, run_dir_name: {run_dir_name}")
     if params['add_uuid'] == 1 and params["use_wandb"] == 1:
         import uuid
-        # if not model_name in ['saint','saint++']:
-        params_str = params_str+f"_{ str(uuid.uuid4())}"
-    ckpt_path = os.path.join(save_dir, params_str)
+        run_dir_name = run_dir_name + f"_{str(uuid.uuid4())}"
+    ckpt_path = os.path.join(save_dir, run_dir_name)
     if not os.path.isdir(ckpt_path):
         os.makedirs(ckpt_path)
     print(f"Start training model: {model_name}, embtype: {emb_type}, save_dir: {ckpt_path}, dataset_name: {dataset_name}")
