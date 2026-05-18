@@ -13,18 +13,18 @@ parameters:
     save_dir:
         values: ["models/dkt_plus_tiaocan"]
     emb_size:
-        values: [64,256]
+        values: [200]
     learning_rate:
-        values: [1e-3, 1e-4, 1e-5]
+        values: [1e-3]
     lambda_r:
-        values: [0, 0.05, 0.10, 0.15, 0.20, 0.25]
+        values: [0.01]
     lambda_w1:
-        values: [0, 0.01, 0.03, 0.1, 0.3, 1.0]
+        values: [0.003]
     lambda_w2:
-        values: [0, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0]
+        values: [3.0]
     dropout:
-        values: [0.05,0.1,0.3,0.5]
+        values: [0.2]
     seed:
-        values: [42, 3407]
+        values: [42]
     fold:
         values: [0, 1, 2, 3, 4]
