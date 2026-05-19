@@ -14,9 +14,9 @@ CONFIG = {
     "output_dir": "",
 
     # candidate filtering thresholds
-    "min_questions": 10,
-    "min_valid_points": 100,
-    "top_ratio": 0.05,
+    "min_questions": 7,
+    "min_valid_points": 800,
+    "top_ratio": 0.3,
     "multi_kc_threshold": 0.3,
 
     # output

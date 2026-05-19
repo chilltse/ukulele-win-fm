@@ -1,6 +1,8 @@
 import os, sys
 import argparse
 import glob
+import shutil
+import json
 from pykt.preprocess.split_datasets import main as split_concept
 from pykt.preprocess.split_datasets_que import main as split_question
 from pykt.preprocess import data_proprocess, process_raw_data
@@ -42,6 +44,7 @@ if __name__ == "__main__":
     parser.add_argument("-l","--maxlen", type=int, default=200)
     parser.add_argument("-k","--kfold", type=int, default=5)
     parser.add_argument("--rollup_node_ids", type=str, default=None)
+    parser.add_argument("--version", type=str, default=None)
     parser.add_argument(
         "--window",
         action="store_true",
@@ -56,12 +59,76 @@ if __name__ == "__main__":
     if args.dataset_name=="peiyou":
         dname2paths["peiyou"] = args.file_path
         print(f"fpath: {args.file_path}")
-    dname, writef = process_raw_data(
-        args.dataset_name,
-        dname2paths,
-        rollup_node_ids=args.rollup_node_ids,
-    )
     config_dataset_name = args.dataset_name
+    dname, writef = "", ""
+
+    if args.dataset_name == "xes3g5m" and args.version:
+        version = str(args.version).strip()
+        with open(configf, "r", encoding="utf-8") as fin:
+            data_config = json.load(fin)
+        xes3g5m_config = data_config.get("xes3g5m", {})
+        versioning = xes3g5m_config.get("versioning", {})
+
+        versions_root = versioning.get("versions_root")
+        output_template = versioning.get("output_dataset_dir_template")
+        source_sequence_file = versioning.get("source_sequence_file")
+
+        if not versions_root:
+            raise KeyError("Missing xes3g5m.versioning.versions_root in configs/data_config.json")
+        if not output_template:
+            raise KeyError("Missing xes3g5m.versioning.output_dataset_dir_template in configs/data_config.json")
+        if not source_sequence_file:
+            raise KeyError("Missing xes3g5m.versioning.source_sequence_file in configs/data_config.json")
+
+        version_root = os.path.normpath(os.path.join(versions_root, version))
+        out_root = os.path.normpath(output_template.format(version=version))
+        out_metadata_dir = os.path.join(out_root, "metadata")
+
+        questions_src = os.path.join(version_root, "questions.json")
+        kc_map_src = os.path.join(version_root, "kc_routes_map.json")
+        if not os.path.exists(questions_src):
+            raise FileNotFoundError(f"Versioned questions.json not found: {questions_src}")
+        if not os.path.exists(kc_map_src):
+            raise FileNotFoundError(f"Versioned kc_routes_map.json not found: {kc_map_src}")
+
+        os.makedirs(out_metadata_dir, exist_ok=True)
+        questions_dst = os.path.join(out_metadata_dir, "questions.json")
+        kc_map_dst = os.path.join(out_metadata_dir, "kc_routes_map.json")
+        shutil.copy2(questions_src, questions_dst)
+        shutil.copy2(kc_map_src, kc_map_dst)
+
+        from pykt.preprocess.xes3g5m_preprocess import read_data_from_csv
+        read_file = source_sequence_file
+        writef = os.path.join(out_root, "data.txt")
+        dname = out_root
+        old_questions_json = os.environ.get("QUESTIONS_JSON")
+        old_kc_routes_map_json = os.environ.get("KC_ROUTES_MAP_JSON")
+        os.environ["QUESTIONS_JSON"] = questions_dst
+        os.environ["KC_ROUTES_MAP_JSON"] = kc_map_dst
+        try:
+            read_data_from_csv(
+                read_file,
+                writef,
+                rollup_node_ids=args.rollup_node_ids,
+            )
+        finally:
+            if old_questions_json is None:
+                os.environ.pop("QUESTIONS_JSON", None)
+            else:
+                os.environ["QUESTIONS_JSON"] = old_questions_json
+            if old_kc_routes_map_json is None:
+                os.environ.pop("KC_ROUTES_MAP_JSON", None)
+            else:
+                os.environ["KC_ROUTES_MAP_JSON"] = old_kc_routes_map_json
+
+        config_dataset_name = f"{args.dataset_name}_{version}"
+    else:
+        dname, writef = process_raw_data(
+            args.dataset_name,
+            dname2paths,
+            rollup_node_ids=args.rollup_node_ids,
+        )
+
     if args.dataset_name in {"xes3g5m", "xes3g5m_tree"} and args.rollup_node_ids:
         rollup_suffix = "_".join(
             [x.strip() for x in str(args.rollup_node_ids).split(",") if x.strip()]
