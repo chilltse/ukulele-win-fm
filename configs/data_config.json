@@ -418,7 +418,7 @@
         "test_original_file_quelevel": "test_quelevel.csv"
     },
     "xes3g5m": {
-        "dpath": "..\\data\\xes3g5m",
+        "dpath": "../data/xes3g5m",
         "num_q": 7651,
         "num_c": 863,
         "input_type": [
@@ -872,7 +872,7 @@
         "kc_tree_path": "../data/nips_task34_tree/kc_knowledge_tree.json"
     },
     "xes3g5m_v2": {
-        "dpath": "..\\data\\xes3g5m_v2",
+        "dpath": "../data/xes3g5m_v2",
         "num_q": 7651,
         "num_c": 877,
         "input_type": [
@@ -904,7 +904,7 @@
         "test_original_file_quelevel": "test_quelevel.csv"
     },
     "xes3g5m_v3": {
-        "dpath": "..\\data\\xes3g5m_v3",
+        "dpath": "../data/xes3g5m_v3",
         "num_q": 7651,
         "num_c": 957,
         "input_type": [
