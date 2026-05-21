@@ -57,6 +57,13 @@ class AKT(nn.Module):
                 Completely removes question/problem difficulty offset.
                 One KC embedding represents all questions under that KC.
                 pid_data is ignored even when n_pid > 0.
+
+            pure_question:
+                Pure question ablation.
+                Completely removes KC input and problem difficulty offset.
+                It uses pid_data / question id sequence as the base embedding id.
+                This is useful for comparing question-only memorization against
+                KC-level sharing under sparse questions.
         """
 
         self.model_name = "akt"
@@ -72,13 +79,40 @@ class AKT(nn.Module):
         embed_l = d_model
 
         # ------------------------------------------------------------
-        # pure_kc ablation switch
+        # Ablation switches
         # ------------------------------------------------------------
         self.is_pure_kc = emb_type == "pure_kc"
+        self.is_pure_question = emb_type == "pure_question"
 
-        # In pure_kc, we deliberately disable all problem/question offset.
-        # Even if n_pid > 0 and pid_data is provided, they are ignored.
-        self.use_pid_difficulty = (self.n_pid > 0) and (not self.is_pure_kc)
+        # In pure_kc / pure_question, we deliberately disable all
+        # problem/question difficulty offsets.
+        #
+        # pure_kc:
+        #     q_data is treated as KC/concept id.
+        #
+        # pure_question:
+        #     pid_data is treated as question/problem id and becomes the
+        #     base embedding id. q_data/KC id is ignored in forward().
+        self.use_pid_difficulty = (
+            (self.n_pid > 0)
+            and (not self.is_pure_kc)
+            and (not self.is_pure_question)
+        )
+
+        # Base embedding vocabulary size.
+        # For qid / pure_kc, q_data is KC/concept id, so use n_question.
+        # For pure_question, pid_data is question/problem id, so use n_pid + 1.
+        # The +1 is consistent with AKT's difficult_param indexing and is
+        # safer when question ids use 0 as padding or are 1-based.
+        if self.is_pure_question:
+            if self.n_pid <= 0:
+                raise ValueError(
+                    "pure_question requires n_pid > 0 because it uses "
+                    "pid_data / question id as the base embedding id."
+                )
+            self.base_n = self.n_pid + 1
+        else:
+            self.base_n = self.n_question
 
         # ------------------------------------------------------------
         # Difficulty / Rasch-style offset branch
@@ -95,22 +129,27 @@ class AKT(nn.Module):
             self.qa_embed_diff = nn.Embedding(2 * self.n_question + 1, embed_l)
 
         # ------------------------------------------------------------
-        # Base KC/question embedding branch
-        # pure_kc intentionally shares this same base embedding mechanism,
-        # but does not add any pid-based offset later.
+        # Base KC/question embedding branch.
+        #
+        # qid / pure_kc:
+        #     q_data is used as the base id, usually KC/concept id.
+        #
+        # pure_question:
+        #     pid_data is used as the base id in forward(), so the embedding
+        #     table size is n_pid + 1.
         # ------------------------------------------------------------
-        if emb_type.startswith("qid") or self.is_pure_kc:
-            self.q_embed = nn.Embedding(self.n_question, embed_l)
+        if emb_type.startswith("qid") or self.is_pure_kc or self.is_pure_question:
+            self.q_embed = nn.Embedding(self.base_n, embed_l)
 
             if self.separate_qa:
-                self.qa_embed = nn.Embedding(2 * self.n_question + 1, embed_l)
+                self.qa_embed = nn.Embedding(2 * self.base_n + 1, embed_l)
             else:
                 self.qa_embed = nn.Embedding(2, embed_l)
         else:
             raise ValueError(
                 f"Unsupported emb_type={emb_type!r}. "
                 "Supported examples: 'qid', 'qid_pdiff', 'qid_avgpool', "
-                "'qid_linear', 'pure_kc'."
+                "'qid_linear', 'pure_kc', 'pure_question'."
             )
 
         # Architecture Object. It contains stack of attention blocks.
@@ -145,7 +184,8 @@ class AKT(nn.Module):
         That can accidentally zero unrelated embeddings in some edge cases.
 
         Here we only zero difficult_param when it actually exists.
-        pure_kc does not create difficult_param, so nothing is zeroed there.
+        pure_kc / pure_question do not create difficult_param, so nothing is
+        zeroed there.
         """
         if self.use_pid_difficulty:
             torch.nn.init.constant_(self.difficult_param.weight, 0.0)
@@ -153,7 +193,14 @@ class AKT(nn.Module):
     def base_emb(self, q_data, target):
         """
         q_data:
-            In your KT setting, this should be the KC/concept id sequence.
+            Base id sequence.
+
+            For qid / pure_kc:
+                this should be the KC/concept id sequence.
+
+            For pure_question:
+                this function receives pid_data/question id sequence from
+                forward(), not the original KC sequence.
 
         target:
             response sequence, usually 0/1.
@@ -162,11 +209,16 @@ class AKT(nn.Module):
             q_embed_data = KC embedding
             qa_embed_data = KC embedding + response embedding
             No problem/question offset will be added in forward().
+
+        For pure_question:
+            q_embed_data = question embedding
+            qa_embed_data = question embedding + response embedding
+            No KC embedding and no problem/question offset will be used.
         """
         q_embed_data = self.q_embed(q_data)  # [batch, seq_len, d_model]
 
         if self.separate_qa:
-            qa_data = q_data + self.n_question * target
+            qa_data = q_data + self.base_n * target
             qa_embed_data = self.qa_embed(qa_data)
         else:
             qa_embed_data = self.qa_embed(target) + q_embed_data
@@ -178,9 +230,21 @@ class AKT(nn.Module):
 
         # ------------------------------------------------------------
         # Base embedding.
-        # qid and pure_kc both use KC/question id embedding.
+        #
+        # qid / pure_kc:
+        #     use q_data as the base id, usually KC/concept id.
+        #
+        # pure_question:
+        #     ignore q_data/KC id and use pid_data/question id as the base id.
         # ------------------------------------------------------------
-        if emb_type.startswith("qid") or self.is_pure_kc:
+        if self.is_pure_question:
+            if pid_data is None:
+                raise ValueError(
+                    "pure_question requires pid_data because it uses "
+                    "question/problem ids as the base embedding sequence."
+                )
+            q_embed_data, qa_embed_data = self.base_emb(pid_data, target)
+        elif emb_type.startswith("qid") or self.is_pure_kc:
             q_embed_data, qa_embed_data = self.base_emb(q_data, target)
         else:
             raise ValueError(f"Unsupported emb_type={emb_type!r}")
@@ -190,7 +254,7 @@ class AKT(nn.Module):
         #     qid / qid_pdiff with n_pid > 0:
         #         use problem difficulty offset.
         #
-        #     pure_kc:
+        #     pure_kc / pure_question:
         #         always None.
         #         This completely removes question/problem-specific shift.
         # ------------------------------------------------------------
@@ -220,13 +284,14 @@ class AKT(nn.Module):
 
             c_reg_loss = (pid_embed_data ** 2.0).sum() * self.l2
         else:
-            # pure_kc reaches here even when self.n_pid > 0.
-            # This is intentional: no problem/question offset at all.
+            # pure_kc / pure_question reach here even when self.n_pid > 0.
+            # This is intentional: no problem/question difficulty offset at all.
             c_reg_loss = q_embed_data.new_tensor(0.0)
 
         # ------------------------------------------------------------
         # Pass to AKT architecture.
-        # For pure_kc, pid_embed_data is None, so pdiff cannot affect attention.
+        # For pure_kc / pure_question, pid_embed_data is None, so pdiff cannot
+        # affect attention.
         # ------------------------------------------------------------
         d_output = self.model(q_embed_data, qa_embed_data, pid_embed_data)
 
@@ -453,7 +518,7 @@ class MultiHeadAttention(nn.Module):
             self.linear = nn.Linear(d_model, d_model, bias=bias)
             self.out_proj = nn.Linear(d_model, d_model, bias=bias)
 
-        elif emb_type.startswith("qid") or emb_type == "pure_kc":
+        elif emb_type.startswith("qid") or emb_type in {"pure_kc", "pure_question"}:
             self.d_k = d_feature
             self.h = n_heads
             self.kq_same = kq_same
@@ -505,7 +570,7 @@ class MultiHeadAttention(nn.Module):
             scores = self.linear(v)
             concat = self.pad_zero(scores, bs, scores.shape[2], zero_pad)
 
-        elif self.emb_type.startswith("qid") or self.emb_type == "pure_kc":
+        elif self.emb_type.startswith("qid") or self.emb_type in {"pure_kc", "pure_question"}:
             k = self.k_linear(k).view(bs, -1, self.h, self.d_k)
 
             if self.kq_same is False:
@@ -524,8 +589,9 @@ class MultiHeadAttention(nn.Module):
             # Only emb_type containing "pdiff" uses problem difficulty
             # inside attention decay.
             #
-            # pure_kc does not contain "pdiff", and pid_embed_data is None,
-            # so this branch completely disables question difficulty in attention.
+            # pure_kc / pure_question do not contain "pdiff", and
+            # pid_embed_data is None, so this branch completely disables
+            # question difficulty in attention.
             if self.emb_type.find("pdiff") == -1:
                 pdiff = None
 
@@ -574,7 +640,7 @@ def attention(q, k, v, d_k, mask, dropout, zero_pad, gamma=None, pdiff=None):
     """
     Multi-head attention with AKT-style distance decay.
 
-    For pure_kc:
+    For pure_kc / pure_question:
         pdiff is always None.
         Therefore only standard distance decay is used.
     """
