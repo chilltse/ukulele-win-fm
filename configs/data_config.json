@@ -89,7 +89,7 @@
         "train_valid_original_file_quelevel": "train_valid_quelevel.csv",
         "train_valid_file_quelevel": "train_valid_sequences_quelevel.csv",
         "test_file_quelevel": "test_sequences_quelevel.csv",
-        "test_window_file_quelevel": "test_window_sequences_quelevel.csv",
+        "test_window_file_quelevel": "",
         "test_original_file_quelevel": "test_quelevel.csv"
     },
     "slepemapy": {
@@ -685,13 +685,13 @@
     },
     "yousician_fmkc": {
         "dpath": "../data/yousician_fmkc",
-        "num_q": 131,
-        "num_c": 131,
+        "num_q": 2353,
+        "num_c": 2353,
         "num_c_fmkc": [
-            22,
-            6,
+            217,
             21,
-            5
+            223,
+            22
         ],
         "kc_fmkc": true,
         "input_type": [
@@ -719,7 +719,7 @@
         "train_valid_original_file_quelevel": "train_valid_quelevel.csv",
         "train_valid_file_quelevel": "train_valid_sequences_quelevel.csv",
         "test_file_quelevel": "test_sequences_quelevel.csv",
-        "test_window_file_quelevel": "test_window_sequences_quelevel.csv",
+        "test_window_file_quelevel": "",
         "test_original_file_quelevel": "test_quelevel.csv"
     },
     "dbe_kt22": {

@@ -6,6 +6,7 @@ examples/pred_wandbs/
 examples/saved_model/
 examples/start_predict.sh
 examples/wandb/
+examples/kc_candidate_question_outputs/
 data/yousician/experiments_report
 data/xes3g5m
 data/eedi

@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 import os
+import csv
 
 from .dkt import DKT
 from .dkt_plus import DKTPlus
@@ -37,8 +38,71 @@ from .lefokt_akt import LEFOKT_AKT
 from .ukt import UKT
 from .hcgkt import HCGKT
 from .robustkt import Robustkt
+from .aegiskc import AegisKC, load_aegiskc_item_fields
 
 device = "cpu" if not torch.cuda.is_available() else "cuda"
+
+
+def _build_aegiskc_item_fields_from_sequences(data_config):
+    dpath = data_config["dpath"]
+    seq_file = data_config.get("train_valid_file", "train_valid_sequences.csv")
+    seq_path = os.path.join(dpath, seq_file)
+    if not os.path.exists(seq_path):
+        raise FileNotFoundError(f"aegiskc auto-build failed, sequence file not found: {seq_path}")
+
+    num_c = int(data_config["num_c"])
+    field_dims_cfg = data_config.get("num_c_fmkc", None)
+    num_fields = len(field_dims_cfg) if isinstance(field_dims_cfg, list) and field_dims_cfg else None
+
+    item_fields = None
+    max_vals = None
+
+    csv.field_size_limit(10**8)
+    with open(seq_path, "r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        if "concepts" not in (reader.fieldnames or []) or "concepts_dense" not in (reader.fieldnames or []):
+            raise ValueError(
+                "aegiskc auto-build requires both `concepts` and `concepts_dense` columns in "
+                f"{seq_path}"
+            )
+
+        for row in reader:
+            concepts = str(row.get("concepts", "")).split(",")
+            dense = str(row.get("concepts_dense", "")).split(",")
+            n = min(len(concepts), len(dense))
+            for i in range(n):
+                d_tok = str(dense[i]).strip()
+                c_tok = str(concepts[i]).strip()
+                if d_tok in {"", "-1"} or c_tok in {"", "-1"}:
+                    continue
+                did = int(d_tok)
+                parts = [int(x) for x in c_tok.split("^")]
+                if num_fields is None:
+                    num_fields = len(parts)
+                if len(parts) != num_fields:
+                    continue
+                if item_fields is None:
+                    item_fields = [[-1] * num_fields for _ in range(num_c)]
+                    max_vals = [0] * num_fields
+                if 0 <= did < num_c and item_fields[did][0] == -1:
+                    item_fields[did] = parts
+                for j, v in enumerate(parts):
+                    if v > max_vals[j]:
+                        max_vals[j] = v
+
+    if item_fields is None:
+        raise ValueError(f"aegiskc auto-build failed: no valid concepts/concepts_dense pairs found in {seq_path}")
+
+    for idx in range(num_c):
+        if item_fields[idx][0] == -1:
+            item_fields[idx] = [0] * num_fields
+
+    if isinstance(field_dims_cfg, list) and len(field_dims_cfg) == num_fields:
+        field_dims = [int(x) for x in field_dims_cfg]
+    else:
+        field_dims = [int(v) + 1 for v in max_vals]
+    field_names = [f"field_{i}" for i in range(num_fields)]
+    return field_names, field_dims, torch.tensor(item_fields, dtype=torch.long)
 
 def init_model(model_name, model_config, data_config, emb_type):
     tree_num_c = data_config.get("num_c_tree", data_config["num_c"])
@@ -180,6 +244,21 @@ def init_model(model_name, model_config, data_config, emb_type):
     elif model_name == "dtransformer":
         model = DTransformer(data_config["num_c"], data_config["num_q"], **model_config, emb_type=emb_type,
                      emb_path=data_config["emb_path"]).to(device)      
+    elif model_name == "aegiskc":
+        item_fields_path = model_config.pop("aegiskc_item_fields", "") or data_config.get("aegiskc_item_fields", "")
+        if item_fields_path:
+            _, field_dims, item_fields = load_aegiskc_item_fields(item_fields_path, data_config["num_c"])
+        else:
+            _, field_dims, item_fields = _build_aegiskc_item_fields_from_sequences(data_config)
+        for k in ["batch_size", "num_epochs", "use_wandb", "add_uuid", "learning_rate"]:
+            model_config.pop(k, None)
+        model = AegisKC(
+            num_c=data_config["num_c"],
+            emb_type=emb_type,
+            field_dims=field_dims,
+            item_fields=item_fields,
+            **model_config,
+        ).to(device)
     else:
         print("The wrong model name was used...")
         return None

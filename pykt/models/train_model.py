@@ -47,7 +47,7 @@ def cal_loss(model, ys, r, rshft, sm, preloss=[]):
             loss1 = loss1 + model.cl_weight * loss2
         loss =loss1
 
-    elif model_name in ["rkt","dimkt","dkt", "dkt_forget", "dkvmn","deep_irt", "kqn", "sakt", "saint", "atkt", "atktfix", "gkt", "skvmn", "hawkes"]:
+    elif model_name in ["rkt","dimkt","dkt", "aegiskc", "dkt_forget", "dkvmn","deep_irt", "kqn", "sakt", "saint", "atkt", "atktfix", "gkt", "skvmn", "hawkes"]:
 
         y = torch.masked_select(ys[0], sm)
         t = torch.masked_select(rshft, sm)
@@ -198,7 +198,7 @@ def model_forward(model, data, rel=None):
     elif model_name in ["lpkt"]:
         # cat = torch.cat((d["at_seqs"][:,0:1], dshft["at_seqs"]), dim=1)
         cit = torch.cat((dcur["itseqs"][:,0:1], dcur["shft_itseqs"]), dim=1)
-    if model_name in ["dkt"]:
+    if model_name in ["dkt", "aegiskc"]:
         if getattr(model, "emb_type", "") == "qid_tree":
             # qid_tree has its own leaf+ancestor loss in model.get_qid_tree_loss(...).
             y_full = model(c.long(), r.long(), None)
@@ -206,6 +206,11 @@ def model_forward(model, data, rel=None):
                 y_full, c.long(), r.long(), return_details=True
             )
             model._last_qid_tree_loss_details = details
+        elif model_name == "aegiskc":
+            if c_dense is None or cshft_dense is None:
+                raise ValueError("aegiskc requires concepts_dense/cdense_seqs in dataset (kc_fmkc pipeline).")
+            y = model(c_dense.long(), r.long())
+            y = (y * one_hot(cshft_dense.long(), model.num_c)).sum(-1)
         elif getattr(model, "emb_type", "") == "qid_fmkc":
             # DKT-fmkc returns target-conditioned predictions.
             # Feed full sequence and align y[:,1:] with rshft.

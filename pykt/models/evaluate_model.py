@@ -125,7 +125,7 @@ def evaluate(model, test_loader, model_name, rel=None, save_path=""):
                 y = y[:,1:]
             elif model_name in ["rekt"]:
                 y = model(dcur)
-            elif model_name in ["dkt", "dkt+"]:
+            elif model_name in ["dkt", "dkt+", "aegiskc"]:
                 if model_name in ["dkt", "dkt+"] and getattr(model, "emb_type", "") == "qid_fmkc":
                     if model_name == "dkt":
                         if ccd is None:
@@ -182,9 +182,16 @@ def evaluate(model, test_loader, model_name, rel=None, save_path=""):
                                 child_pred_expanded = child_pred.unsqueeze(-1).expand_as(anc_pred)
                                 hier_child_scores.append(child_pred_expanded[parent_mask].detach().cpu().numpy())
                                 hier_parent_scores.append(anc_pred[parent_mask].detach().cpu().numpy())
+                    elif model_name == "aegiskc":
+                        if c_dense is None or cshft_dense is None:
+                            raise ValueError("aegiskc requires concepts_dense/cdense_seqs in dataset (kc_fmkc pipeline).")
+                        y = model(c_dense.long(), r.long())
                     else:
                         y = model(c.long(), r.long())
-                    y = (y * one_hot(cshft.long(), model.num_c)).sum(-1)
+                    if model_name == "aegiskc":
+                        y = (y * one_hot(cshft_dense.long(), model.num_c)).sum(-1)
+                    else:
+                        y = (y * one_hot(cshft.long(), model.num_c)).sum(-1)
             elif model_name in ["dkt_forget"]:
                 y = model(c.long(), r.long(), dgaps)
                 y = (y * one_hot(cshft.long(), model.num_c)).sum(-1)
