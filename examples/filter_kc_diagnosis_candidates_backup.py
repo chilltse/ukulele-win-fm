@@ -405,4 +405,6 @@ def main():
 
 
 if __name__ == "__main__":
+    # python filter_kc_diagnosis_candidates.py --input_csv "path/to/assist2015_dkt_qid_fold0_kc_question_heterogeneity.csv"
+    # python filter_kc_diagnosis_candidates.py --input_csv "saved_model\xes3g5m_tree_manual_split_dkt_qid_f0_s42_9f56db0c78_e9e2182e-96c3-44e0-a653-8b555f7f3519\qid_valid_residual_diagnosis\xes3g5m_tree_manual_split_dkt_qid_fold0_kc_question_heterogeneity.csv"
     main()

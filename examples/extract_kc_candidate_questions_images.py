@@ -353,5 +353,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     # python extract_kc_candidate_questions_images.py --candidate-csv xes3g5m_tree_manual_split_dkt_qid_fold0_kc_question_heterogeneity_over_coarse_candidates.csv --kc-map-json decoded_kc_routes_map.json --questions-json decoded_questions.json --image-root images --copy-images --output-dir kc_candidate_question_outputs
-    # python extract_kc_candidate_questions_images.py --candidate-csv qid_valid_residual_diagnosis\xes3g5m_tree_manual_split_dkt_qid_fold0_kc_question_heterogeneity_over_coarse_candidates.csv --kc-map-json ../data\xes3g5m_tree_manual_split\metadata\kc_routes_map.json --questions-json ../data\xes3g5m_tree_manual_split\metadata\questions.json --output-dir kc_candidate_question_outputs --image-root ../data\xes3g5m\metadata\images --copy-images 
+    # python extract_kc_candidate_questions_images.py --candidate-csv "saved_model\xes3g5m_dkt+_qid_f0_s42_c24dee95fa_551aa3ec-6240-46f7-b884-9aecba6d2426\d\valid_kc_question_heterogeneity_over_coarse_candidates.csv" --kc-map-json ../data\xes3g5m\metadata\kc_routes_map.json --questions-json ../data\xes3g5m\metadata\questions.json --output-dir kc_candidate_question_outputs --image-root ../data\xes3g5m\metadata\images --copy-images 
     main()
